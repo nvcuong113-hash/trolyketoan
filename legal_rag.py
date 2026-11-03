@@ -5,6 +5,7 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -70,6 +71,12 @@ def build_legal_index(uploaded: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in uploaded:
         metadata = item["metadata"]
         if metadata.get("status") != "Còn hiệu lực":
+            continue
+        parsed_url = urlparse(metadata.get("source_url",""))
+        host = (parsed_url.hostname or "").lower()
+        trusted_hosts = {"vanban.chinhphu.vn","vbpl.moj.gov.vn","mof.gov.vn","portal.mof.gov.vn","nif.mof.gov.vn","gdt.gov.vn"}
+        trusted = host in trusted_hosts or any(host.endswith("."+domain) for domain in {"mof.gov.vn","gdt.gov.vn","moj.gov.vn","chinhphu.vn"})
+        if parsed_url.scheme != "https" or not trusted:
             continue
         start = date.fromisoformat(metadata["effective_from"])
         end = date.fromisoformat(metadata["effective_to"]) if metadata.get("effective_to") else None
