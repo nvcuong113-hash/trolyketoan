@@ -132,26 +132,37 @@ def advanced_pre_audit(journal: pd.DataFrame, trial_balance: pd.DataFrame | None
     work["_debit"] = work[debit_col].fillna("").astype(str).str.strip()
     work["_credit"] = work[credit_col].fillna("").astype(str).str.strip()
     work["_amount"] = work[amount_col].map(parse_money)
-    # Check 4: common normal-balance direction anomalies; warnings only, not automatic errors.
-    normal_debit = ("1", "2", "6", "8")
-    normal_credit = ("3", "4", "5", "7")
+    # Check 4: malformed/self-offsetting account pairs. This avoids assuming
+    # that every credit to an asset or debit to a liability is erroneous.
     for idx, row in work.iterrows():
-        d, c = row["_debit"], row["_credit"]
-        suspicious = (d.startswith(normal_credit) and not d.startswith(("333", "334", "335", "338"))) or (
-            c.startswith(normal_debit) and not c.startswith(("214", "229", "159")))
-        if suspicious and row["_amount"] > 0:
-            findings.append({"Nhóm kiểm tra": "Định khoản cần rà soát", "Ngày": "",
+        d, cr = row["_debit"], row["_credit"]
+        if d and cr and d == cr:
+            findings.append({"Nhóm kiểm tra": "Định khoản cùng tài khoản", "Ngày": "",
                 "Dòng dữ liệu": int(idx)+2, "Giá trị": row["_amount"],
-                "Cảnh báo": f"Bút toán Nợ {d} / Có {c} có thể ngược tính chất tài khoản; cần kiểm tra nghiệp vụ"})
-    # Check 5: duplicate voucher IDs on the same accounting date.
-    if voucher_col and date_col:
-        dates = pd.to_datetime(work[date_col], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
-        duplicate = work.assign(_voucher=work[voucher_col].fillna("").astype(str).str.strip(), _date=dates)
-        duplicate = duplicate[(duplicate["_voucher"] != "") & duplicate.duplicated(["_voucher", "_date"], keep=False)]
-        for idx, row in duplicate.iterrows():
-            findings.append({"Nhóm kiểm tra": "Trùng số chứng từ", "Ngày": row["_date"],
-                "Dòng dữ liệu": int(idx)+2, "Giá trị": row["_amount"],
-                "Cảnh báo": f"Số chứng từ {row['_voucher']} xuất hiện nhiều lần trong cùng ngày"})
+                "Cảnh báo": f"TK Nợ và TK Có cùng là {d}; cần kiểm tra khả năng nhập nhầm"})
+        for side, account in (("Nợ", d), ("Có", cr)):
+            if account and not re.fullmatch(r"\d{3,8}", account):
+                findings.append({"Nhóm kiểm tra": "Mã tài khoản bất thường", "Ngày": "",
+                    "Dòng dữ liệu": int(idx)+2, "Giá trị": row["_amount"],
+                    "Cảnh báo": f"Mã tài khoản {side} '{account}' không theo cấu trúc số phổ biến; cần đối chiếu hệ thống tài khoản doanh nghiệp"})
+    # Check 5: repeated identical journal lines, not merely repeated voucher IDs
+    # (a voucher may legitimately contain many accounting lines).
+    desc_col = find_column(work.columns, ["Diễn giải", "Nội dung", "Description"])
+    duplicate_keys = ["_debit", "_credit", "_amount"]
+    if date_col:
+        work["_audit_date"] = pd.to_datetime(work[date_col], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
+        duplicate_keys.append("_audit_date")
+    if voucher_col:
+        work["_audit_voucher"] = work[voucher_col].fillna("").astype(str).str.strip()
+        duplicate_keys.append("_audit_voucher")
+    if desc_col:
+        work["_audit_desc"] = work[desc_col].fillna("").astype(str).str.strip()
+        duplicate_keys.append("_audit_desc")
+    duplicate = work[work.duplicated(duplicate_keys, keep=False)]
+    for idx, row in duplicate.iterrows():
+        findings.append({"Nhóm kiểm tra": "Dòng hạch toán trùng lặp", "Ngày": row.get("_audit_date", ""),
+            "Dòng dữ liệu": int(idx)+2, "Giá trị": row["_amount"],
+            "Cảnh báo": "Có dòng hạch toán giống nhau về ngày, tài khoản, số tiền và thông tin chứng từ; cần kiểm tra trùng nhập"})
     # Check 6: trial-balance debit/credit totals and potential unclosed P&L accounts.
     if trial_balance is not None and not trial_balance.empty:
         debit_total_col = find_column(trial_balance.columns, ["Tổng phát sinh Nợ", "Phát sinh Nợ", "Số dư Nợ", "Cộng Nợ"])
@@ -209,14 +220,14 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
         "so tien": ("Tiền thu",) if transaction_type == "thu_tien_gui" else ("Tiền chi",),
         "ma hoa don": ("Mã hóa đơn",), "ma so thue": ("Mã số thuế",),
     }
-    required = {"ngay hach toan", "ngay chung tu", "so chung tu", "so tien"}
-    chosen_sheet, header_row, mapping = None, None, None
+    required = {"ngay hach toan", "ngay chung tu", "so chung tu", "tai khoan no", "tai khoan co", "so tien"}
+    chosen_sheet, header_row, mapping, best_score = None, None, None, -1
     for ws in wb.worksheets:
         for row_idx in range(1, min(ws.max_row, 40)+1):
             headers = {normalize_text(cell.value): cell.column for cell in ws[row_idx] if cell.value is not None}
             score = sum(1 for key in aliases if key in headers)
-            if mapping is None or score > len(mapping):
-                chosen_sheet, header_row, mapping = ws, row_idx, headers
+            if score > best_score:
+                chosen_sheet, header_row, mapping, best_score = ws, row_idx, headers, score
     if chosen_sheet is None or not mapping or sum(1 for k in required if k in mapping) < len(required):
         raise ValueError("Không nhận diện được mẫu Excel. Hãy tải đúng mẫu nhập khẩu cho loại chứng từ đã chọn từ phần mềm kế toán.")
     missing_headers = [k for k in required if k not in mapping]
@@ -234,11 +245,8 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
         rows = rows[rows[amount_source].map(parse_money) > 0]
     rows = rows[~rows.get("Chưa đủ chứng từ", pd.Series(False, index=rows.index)).fillna(False).astype(bool)]
     # MISA SME imports bank receipts and payments as separate voucher types/files.
+    style_source = chosen_sheet[header_row+1] if chosen_sheet.max_row >= header_row+1 else None
     for out_idx, (_, source) in enumerate(rows.iterrows(), start=header_row+1):
-        if out_idx <= chosen_sheet.max_row:
-            style_source = chosen_sheet[header_row+1]
-        else:
-            style_source = None
         for key, col_idx in mapping.items():
             if key not in aliases:
                 continue
@@ -264,8 +272,8 @@ def build_sepay_qr_url(bank: str, account: str, amount: int, user_id: str,
                        account_holder: str = "", require_sevqr: bool = False) -> str:
     if not bank or not account or not user_id or amount <= 0:
         raise ValueError("Thiếu cấu hình ngân hàng hoặc thông tin thanh toán.")
-    code = re.sub(r"[^A-Za-z0-9]", "", user_id)[:20].upper()
-    memo = f"TKPRO{code}"
+    code = re.sub(r"[^A-Za-z0-9]", "", user_id).upper()
+    memo = code if code.startswith("TKPRO") else f"TKPRO{code}"
     if require_sevqr:
         memo = f"SEVQR {memo}"
     params = {"acc": account, "bank": bank, "amount": str(int(amount)), "des": memo, "template": "compact"}
