@@ -80,7 +80,7 @@ def _process_event(event_id: str):
 
 def process_pending_events(limit: int = 50):
     db = _server_client()
-    rows = db.table("webhook_events").select("id").in_("status",["pending","failed"]).lt("attempts",5).order("created_at").limit(limit).execute().data
+    rows = db.table("webhook_events").select("id").in_("status",["pending","failed","processing"]).lt("attempts",5).order("created_at").limit(limit).execute().data
     for row in rows or []:
         _process_event(row["id"])
 
