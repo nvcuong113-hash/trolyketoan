@@ -4,6 +4,7 @@ import io
 import re
 import uuid
 import zipfile
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import date
 from difflib import SequenceMatcher
@@ -20,8 +21,9 @@ MAX_SUBSET_CANDIDATES = 80
 def normalize_text(value: object) -> str:
     if value is None or pd.isna(value):
         return ""
-    value = str(value).casefold().strip()
-    value = value.replace("đ", "d")
+    value = str(value).casefold().strip().replace("đ", "d")
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
     value = re.sub(r"[\W_]+", " ", value, flags=re.UNICODE)
     return re.sub(r"\s+", " ", value).strip()
 
