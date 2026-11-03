@@ -6,7 +6,8 @@ from accounting_extensions import (
     advanced_pre_audit, build_executive_pnl, build_sepay_qr_url,
     map_staging_to_template, reconcile_payables,
 )
-from billing_api import parse_sepay_event
+from billing_api import parse_sepay_event, verify_hmac
+import hashlib, hmac
 
 
 def test_reconcile_payables_classifies_invoice_and_missing_payment():
@@ -71,3 +72,13 @@ def test_advanced_pre_audit_trial_balance_mismatch():
     tb=pd.DataFrame([{"Tài khoản":"111","Tổng phát sinh Nợ":100,"Tổng phát sinh Có":50}])
     findings=advanced_pre_audit(journal,tb,period_end=date(2026,12,31))
     assert (findings["Nhóm kiểm tra"]=="Bảng cân đối phát sinh không cân").any()
+
+
+def test_sepay_hmac_verification_and_replay_window():
+    raw=b'{"id":1,"transferAmount":1000}'
+    secret="test-secret"
+    timestamp="1793700000"
+    digest=hmac.new(secret.encode(),timestamp.encode()+b"."+raw,hashlib.sha256).hexdigest()
+    signature="sha256="+digest
+    assert verify_hmac(raw,signature,timestamp,secret,now=1793700000)
+    assert not verify_hmac(raw,signature,timestamp,secret,now=1793701000)
