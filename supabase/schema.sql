@@ -159,3 +159,22 @@ $;
 
 revoke all on function public.set_subscription_tax_codes(text[]) from public, anon;
 grant execute on function public.set_subscription_tax_codes(text[]) to authenticated;
+
+
+-- Durable queue for provider webhook events. It contains payment metadata only.
+create table if not exists public.webhook_events (
+  id uuid primary key default gen_random_uuid(),
+  provider text not null default 'sepay',
+  transaction_id bigint not null unique,
+  payload jsonb not null,
+  status text not null default 'pending' check (status in ('pending','processing','processed','failed')),
+  attempts integer not null default 0,
+  last_error text,
+  processing_result jsonb,
+  created_at timestamptz not null default now(),
+  processed_at timestamptz
+);
+create index if not exists webhook_events_status_created_idx on public.webhook_events(status,created_at);
+alter table public.webhook_events enable row level security;
+revoke all on public.webhook_events from public, anon, authenticated;
+grant all on public.webhook_events to service_role;
