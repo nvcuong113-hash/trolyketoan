@@ -1,20 +1,20 @@
 # Trợ lý Kế toán SME
 
 ## Product
-Trợ lý xử lý file cho kế toán doanh nghiệp nhỏ tại Việt Nam. Ứng dụng Streamlit hỗ trợ đối soát sao kê, kiểm soát hóa đơn XML, chuẩn hóa dữ liệu thu chi, quản trị tuổi nợ, kiểm tra sổ sách và báo cáo dòng tiền.
+Ứng dụng xử lý tệp cho kế toán SME Việt Nam: sao kê, công nợ, hóa đơn XML, nhật ký thu chi và báo cáo dòng tiền.
 
-## Core modules
-- FR-01: bank statement reconciliation and invoice subset matching.
-- FR-02: electronic invoice XML checks.
-- FR-03: accounting staging and Excel exports.
-- FR-04: receivables aging and reminder message drafting.
-- FR-05: pre-audit checks.
-- FR-06: cash-flow reporting.
-- FR-07: tax/accounting guidance (RAG is not enabled in the MVP).
-- FR-08: plans and payment (real authentication and VietQR webhook are not enabled).
+## Modules
+- FR-01: đối soát sao kê và ghép hóa đơn trả gộp.
+- FR-02: đọc XML hóa đơn và kiểm tra cơ bản.
+- FR-03: staging và xuất Excel.
+- FR-04: tuổi nợ và tin nhắn nhắc việc.
+- FR-05: kiểm tra sổ sách sơ bộ.
+- FR-06: báo cáo dòng tiền.
+- FR-07: RAG pháp luật chưa được bật.
+- FR-08: tài khoản/thuê bao/thanh toán thật chưa được bật.
 
 ## Data handling
-Uploaded financial files are processed in memory for the current Streamlit session. The MVP does not persist accounting ledgers to a database. Review all generated matching, accounting, and tax outputs before relying on them.
+Tệp kế toán xử lý trong bộ nhớ phiên; không cấu hình database lưu sổ sách. Người dùng phải kiểm tra kết quả.
 
 ## Limitations
-This is an MVP, not a certified accounting or tax filing product. MISA/VACOM import templates, legal-source retrieval, digital-signature validation, authentication, subscription billing, and payment webhooks require further implementation and vendor-specific specifications.
+MVP không xác thực chữ ký số XML về mặt mật mã, không tra cứu trạng thái hóa đơn cơ quan thuế, không đảm bảo mẫu import MISA/VACOM, không cung cấp RAG pháp lý đã kiểm chứng, xác thực tài khoản hoặc webhook VietQR.
