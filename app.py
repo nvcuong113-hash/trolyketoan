@@ -364,6 +364,7 @@ with tabs[6]:
 with tabs[7]:
     st.subheader("Cố vấn nghiệp vụ & pháp lý thuế có kiểm chứng")
     st.warning("Chỉ tài liệu có metadata hiệu lực và được người quản trị xác nhận mới được tìm kiếm. Hệ thống không tự xác minh hiệu lực của file tải lên.")
+    st.caption("Câu hỏi gửi đến AI (nếu đã cấu hình) chỉ được che một số chuỗi định danh bằng quy tắc tự động. Hãy tự bỏ tên khách hàng, số hợp đồng, địa chỉ và dữ liệu mật trước khi tra cứu.")
     legal_admin_ids = {x.strip() for x in get_setting("LEGAL_ADMIN_USER_IDS","").split(",") if x.strip()}
     is_legal_admin = bool(current_user and current_user.id in legal_admin_ids)
     if is_legal_admin:
