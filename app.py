@@ -66,7 +66,7 @@ def export_bytes(label, data, filename, key):
 @st.fragment(run_every="3s")
 def payment_status_widget(client, payment_code):
     try:
-        rows = client.table("payments").select("status,paid_at,plan,amount").eq("payment_code",payment_code).limit(1).execute().data
+        rows = client.table("payments").select("status,paid_at,plan,amount,expires_at").eq("payment_code",payment_code).limit(1).execute().data
         if not rows:
             st.caption("Đang chờ trạng thái đơn thanh toán…")
             return
@@ -78,6 +78,8 @@ def payment_status_widget(client, payment_code):
                 st.rerun()
         elif row["status"] == "expired":
             st.warning("Đơn thanh toán đã hết hạn. Hãy tạo đơn mới.")
+        elif row.get("expires_at") and pd.to_datetime(row["expires_at"],utc=True) <= pd.Timestamp.now(tz="UTC"):
+            st.warning("Đơn đã hết thời gian hiệu lực; cron worker sẽ cập nhật trạng thái hết hạn. Hãy tạo đơn mới.")
         elif row["status"] == "rejected":
             st.error("Giao dịch chưa được xác nhận do sai số tiền hoặc thông tin đơn.")
         else:
