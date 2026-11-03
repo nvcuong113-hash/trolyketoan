@@ -243,9 +243,11 @@ with tabs[3]:
         st.divider()
         st.markdown("**Tạo file theo mẫu import chính thức**")
         st.caption("MISA yêu cầu từng loại chứng từ dùng một file mẫu riêng. Tải mẫu đúng loại chứng từ trong phần mềm, sau đó đưa vào đây để giữ nguyên tên cột và định dạng.")
-        target = st.selectbox("Loại chứng từ",["thu_tien_gui","chi_tien_gui"],format_func=lambda x:"Thu tiền gửi" if x=="thu_tien_gui" else "Chi tiền gửi")
+        target = st.selectbox("Loại chứng từ",["thu_tien_gui","chi_tien_gui","chuyen_tien_noi_bo"],format_func=lambda x:{"thu_tien_gui":"Thu tiền gửi","chi_tien_gui":"Chi tiền gửi","chuyen_tien_noi_bo":"Chuyển tiền nội bộ"}[x])
+        if target == "chuyen_tien_noi_bo":
+            st.caption("Trước khi xuất, sửa Loại chứng từ thành Chuyển tiền nội bộ và điền Tài khoản đi/Tài khoản đến trên từng dòng.")
         template = st.file_uploader("Tải mẫu Excel import từ MISA/VACOM",["xlsx"],key="accounting_template")
-        default_prefix = "PTG" if target=="thu_tien_gui" else "PCG"
+        default_prefix = {"thu_tien_gui":"PTG","chi_tien_gui":"PCG","chuyen_tien_noi_bo":"CTNB"}[target]
         voucher_prefix = st.text_input("Tiền tố số chứng từ",value=default_prefix)
         voucher_start = st.number_input("Số thứ tự chứng từ bắt đầu (kiểm tra để tránh trùng)",min_value=1,value=1,step=1)
         if st.button("Ánh xạ dữ liệu vào file mẫu",disabled=not(template and voucher_prefix.strip())):
