@@ -12,6 +12,7 @@
 ```bash
 python -m venv .venv
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 streamlit run app.py
 ```
 
@@ -43,9 +44,12 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 
 ## Kiểm thử
 ```bash
-python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py legal_storage.py process_billing_queue.py
+python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py legal_storage.py process_billing_queue.py sample_data.py
 pytest -q
 ```
+
+## File mẫu dùng thử
+Mỗi phân hệ có nút tải file mẫu trực tiếp trong giao diện. FR-02 có ZIP XML mẫu với chữ ký placeholder (không phải chữ ký số thật); FR-07 có file câu hỏi mẫu, không giả làm văn bản pháp luật. Bộ mẫu được sinh bằng `BytesIO` trong RAM, không ghi file lên server.
 
 ## Các nghiệp vụ đã có
 - FR-01: đối soát tiền vào, ghép hóa đơn trả gộp cùng đối tác; gợi ý phân loại tiền ra.
@@ -64,7 +68,7 @@ pytest -q
 - Legal corpus chưa được đóng gói sẵn; cần người quản trị nạp văn bản, kiểm tra hiệu lực và xác nhận metadata. Tệp được lưu ở Supabase Storage private; chỉ URL nguồn chính thức được chấp nhận. Không bật kết luận nếu không có văn bản phù hợp.
 - P&L là ước tính theo tài khoản và cần map theo hệ thống tài khoản / chế độ kế toán doanh nghiệp.
 - 20 triệu không được hard-code làm ngưỡng thuế cố định; cần xác định điều kiện theo từng loại thuế, kỳ và văn bản áp dụng.
-- SePay/Supabase chưa thể nhận tiền thật cho đến khi chủ tài khoản cung cấp và cấu hình credentials, tài khoản ngân hàng và webhook.
+- SePay/Supabase chưa thể nhận tiền thật cho đến khi chủ tài khoản cung cấp và cấu hình credentials, tài khoản ngân hàng và webhook. HMAC theo raw body + timestamp; API Key là phương án dự phòng. Cấu hình IP allowlist và kiểm tra đối soát giao dịch định kỳ trước production.
 - Dữ liệu tạm được xóa sau download theo mặc định và có nút xóa thủ công. Session TTL được kiểm tra khi Streamlit rerun; không đảm bảo xóa tức thì nếu browser treo/worker vẫn giữ phiên.
 - CI có benchmark hồi quy 5.000 dòng/3 giây trên GitHub runner; vẫn cần benchmark với mẫu thực tế từng ngân hàng trước khi cam kết SLA production.
 
