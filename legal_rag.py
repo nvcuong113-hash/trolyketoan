@@ -34,7 +34,7 @@ def extract_text(filename: str, content: bytes) -> str:
         doc = Document(io.BytesIO(content))
         return "\n".join(p.text for p in doc.paragraphs)
     if suffix in {".txt", ".md"}:
-        return content.decode("utf-8-sig", errors="replace")
+        return content.decode("utf-8-sig", errors="replace") if isinstance(content, bytes) else str(content)
     raise ValueError("Chỉ hỗ trợ PDF có text, DOCX, TXT hoặc MD. PDF scan cần OCR trước.")
 
 
