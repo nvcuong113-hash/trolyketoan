@@ -151,10 +151,9 @@ def subset_sum_indices(amounts: Iterable[object], target: object, epsilon: int =
     values.sort(key=lambda item: item[1], reverse=True)
     if not values or len(values) > MAX_SUBSET_CANDIDATES or target_i <= 0:
         return None
-    # Dynamic programming keeps the shortest combination for each reachable sum.
-    # Bound the search range to avoid unbounded memory on malformed input.
     states: dict[int, tuple[int, ...]] = {0: ()}
     ceiling = target_i + epsilon
+    best_match: tuple[int, tuple[int, ...]] | None = None
     for original_idx, amount in values:
         updates = {}
         for subtotal, chosen in list(states.items()):
@@ -168,14 +167,18 @@ def subset_sum_indices(amounts: Iterable[object], target: object, epsilon: int =
         for total, chosen in updates.items():
             if total not in states or len(chosen) < len(states[total]):
                 states[total] = chosen
-        # Hard memory ceiling: return "unmatched" rather than risking worker exhaustion.
         if len(states) > 200_000:
             return None
-        matches = [(total, chosen) for total, chosen in states.items() if chosen and abs(total-target_i) <= epsilon]
+        matches = [(total, chosen) for total, chosen in states.items()
+                   if chosen and abs(total-target_i) <= epsilon]
+        exact = [(total, chosen) for total, chosen in matches if total == target_i]
+        if exact:
+            return list(min(exact, key=lambda item: (len(item[1]), item[1]))[1])
         if matches:
-            return list(min(matches, key=lambda item: (len(item[1]), abs(item[0]-target_i)))[1])
-    return None
-
+            candidate = min(matches, key=lambda item: (abs(item[0]-target_i), len(item[1])))
+            if best_match is None or (abs(candidate[0]-target_i), len(candidate[1])) < (abs(best_match[0]-target_i), len(best_match[1])):
+                best_match = candidate
+    return list(best_match[1]) if best_match else None
 
 def _customer_candidates(invoices: pd.DataFrame, description: str, threshold: float) -> list[int]:
     desc_norm = normalize_text(description)
