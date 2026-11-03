@@ -90,10 +90,11 @@ def build_executive_pnl(journal: pd.DataFrame, receivables: pd.DataFrame | None 
     deductions = debit_sum("521")
     net_revenue = gross_revenue - deductions
     cogs = debit_sum("632")
-    payroll = sum(debit_sum(p) for p in ("622", "627", "6411", "6421"))
-    operating = sum(debit_sum(p) for p in ("641", "642")) - debit_sum("6411") - debit_sum("6421")
-    other_expenses = debit_sum("635") + debit_sum("811")
-    estimated_profit = net_revenue - cogs - payroll - operating - other_expenses
+    payroll_detail = sum(debit_sum(p) for p in ("622", "627", "6411", "6421"))
+    operating = debit_sum("641") + debit_sum("642")
+    financial_net = debit_sum("635") - credit_sum("515")
+    other_net = debit_sum("811") - credit_sum("711") + debit_sum("821")
+    estimated_profit = net_revenue - cogs - operating - financial_net - other_net
     def top_debt(df, amount_aliases, name_aliases, label):
         if df is None or df.empty:
             return []
@@ -109,8 +110,9 @@ def build_executive_pnl(journal: pd.DataFrame, receivables: pd.DataFrame | None 
     return {
         "Doanh thu": float(gross_revenue), "Giảm trừ doanh thu": float(deductions),
         "Doanh thu thuần": float(net_revenue), "Giá vốn": float(cogs),
-        "Chi phí nhân công (ước tính)": float(payroll), "Chi phí vận hành (ước tính)": float(operating),
-        "Chi phí tài chính/khác": float(other_expenses), "Lợi nhuận ước tính": float(estimated_profit),
+        "Chi phí nhân công chi tiết (tham khảo, đã nằm trong nhóm chi phí)": float(payroll_detail),
+        "Chi phí bán hàng và quản lý": float(operating), "Chi phí tài chính thuần": float(financial_net),
+        "Chi phí khác và thuế TNDN": float(other_net), "Lợi nhuận ước tính": float(estimated_profit),
         "Top 5 phải thu": top_debt(receivables, ["Còn phải thu", "Số tiền phải thu", "Số dư nợ", "Amount"], ["Tên khách hàng", "Khách hàng", "Đối tác"], "AR"),
         "Top 5 phải trả": top_debt(payables, ["Còn phải trả", "Số tiền phải trả", "Số dư có", "Amount"], ["Tên nhà cung cấp", "Nhà cung cấp", "Đối tác"], "AP"),
         "Ghi chú": "P&L ước tính theo phát sinh tài khoản; cần rà soát bút toán kết chuyển, phân loại chi phí và kỳ báo cáo."
