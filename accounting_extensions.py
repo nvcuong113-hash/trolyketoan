@@ -136,6 +136,8 @@ def build_executive_pnl(journal: pd.DataFrame, receivables: pd.DataFrame | None 
     credit_col = find_column(journal.columns, ["Tài khoản Có", "TK Có", "Credit account"], required=True)
     amount_col = find_column(journal.columns, ["Số tiền", "Phát sinh", "Số phát sinh", "Amount"], required=True)
     work = journal.copy()
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("Ngày bắt đầu kỳ P&L phải trước hoặc bằng ngày kết thúc.")
     if start_date or end_date:
         date_col = find_column(work.columns, ["Ngày hạch toán", "Ngày chứng từ", "Ngày", "Date"], required=True)
         work["_pnl_date"] = pd.to_datetime(work[date_col], errors="coerce", dayfirst=True)
