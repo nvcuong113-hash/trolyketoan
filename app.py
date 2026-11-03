@@ -21,12 +21,20 @@ st.set_page_config(page_title="Trợ lý Kế toán SME", page_icon="🧾", layo
 TTL_SECONDS = 600
 PLAN_LABELS = {"internal": "Kế toán Nội bộ", "service": "Kế toán Dịch vụ"}
 
+def upload_key(name):
+    return f"{name}_{st.session_state.get('_upload_epoch',0)}"
+
 def clear_data():
-    # Keep only authentication and inactivity timestamp; remove uploader widget
-    # state as well as parsed frames/results from the session.
+    # Keep authentication and increment uploader epoch so every uploaded file
+    # widget is recreated empty on the next run.
+    next_epoch = int(st.session_state.get("_upload_epoch",0)) + 1
     for key in list(st.session_state.keys()):
-        if key not in {"auth_session", "_last_activity"}:
-            del st.session_state[key]
+        if key not in {"auth_session", "_last_activity", "_upload_epoch"}:
+            try:
+                del st.session_state[key]
+            except Exception:
+                pass
+    st.session_state["_upload_epoch"] = next_epoch
     gc.collect()
 
 now = time.time()
@@ -146,8 +154,8 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("Đối soát sao kê ngân hàng & ghép hóa đơn trả gộp")
     left,right = st.columns(2)
-    bank = left.file_uploader("1. Sao kê ngân hàng",["xlsx","xls","csv"],key="bank")
-    ar = right.file_uploader("2. Danh sách công nợ phải thu",["xlsx","xls","csv"],key="ar")
+    bank = left.file_uploader("1. Sao kê ngân hàng",["xlsx","xls","csv"],key=upload_key("bank"))
+    ar = right.file_uploader("2. Danh sách công nợ phải thu",["xlsx","xls","csv"],key=upload_key("ar"))
     threshold = st.slider("Ngưỡng khớp từ khóa đối tác",0.60,1.00,0.80,0.01)
     epsilon = st.number_input("Sai số ghép hóa đơn (VNĐ)",0,100000,1000,100)
     if st.button("🔎 Thực hiện đối soát",type="primary",disabled=not(bank and ar)):
@@ -183,8 +191,8 @@ with tabs[2]:
     st.subheader("Kiểm soát hóa đơn XML & nợ chứng từ")
     tax = st.text_input("Mã số thuế doanh nghiệp",key="co_tax")
     company = st.text_input("Tên doanh nghiệp theo đăng ký",key="co_name")
-    xml = st.file_uploader("Hóa đơn XML hoặc ZIP chứa nhiều XML",["xml","zip"],key="xml")
-    pay = st.file_uploader("Nhật ký thanh toán / sao kê tiền ra (không bắt buộc)",["xlsx","xls","csv"],key="payments")
+    xml = st.file_uploader("Hóa đơn XML hoặc ZIP chứa nhiều XML",["xml","zip"],key=upload_key("xml"))
+    pay = st.file_uploader("Nhật ký thanh toán / sao kê tiền ra (không bắt buộc)",["xlsx","xls","csv"],key=upload_key("payments"))
     if st.button("🧾 Kiểm tra hóa đơn và nợ chứng từ",type="primary",disabled=not xml):
         try:
             invoices = parse_invoice_upload(xml.name,xml.getvalue(),tax,company)
@@ -216,7 +224,7 @@ with tabs[2]:
 
 with tabs[3]:
     st.subheader("Nhập một lần – xuất đa đích")
-    source = st.file_uploader("Tải nhật ký thu-chi / dữ liệu đã đối soát",["xlsx","xls","csv"],key="staging_file")
+    source = st.file_uploader("Tải nhật ký thu-chi / dữ liệu đã đối soát",["xlsx","xls","csv"],key=upload_key("staging_file"))
     standard = st.selectbox("Chế độ kế toán tham chiếu",["99","133","200-transition"],
         format_func=lambda x:{"99":"Thông tư 99/2025/TT-BTC (năm tài chính bắt đầu từ 2026)","133":"Thông tư 133/2016/TT-BTC (DN nhỏ và vừa đủ điều kiện)","200-transition":"TT200 – chỉ kỳ tài chính chuyển tiếp phù hợp"}[x])
     if st.button("Chuẩn hóa dữ liệu",disabled=not source):
@@ -248,7 +256,7 @@ with tabs[3]:
         target = st.selectbox("Loại chứng từ",["thu_tien_gui","chi_tien_gui","chuyen_tien_noi_bo"],format_func=lambda x:{"thu_tien_gui":"Thu tiền gửi","chi_tien_gui":"Chi tiền gửi","chuyen_tien_noi_bo":"Chuyển tiền nội bộ"}[x])
         if target == "chuyen_tien_noi_bo":
             st.caption("Trước khi xuất, sửa Loại chứng từ thành Chuyển tiền nội bộ và điền Tài khoản đi/Tài khoản đến trên từng dòng.")
-        template = st.file_uploader("Tải mẫu Excel import từ MISA/VACOM",["xlsx"],key="accounting_template")
+        template = st.file_uploader("Tải mẫu Excel import từ MISA/VACOM",["xlsx"],key=upload_key("accounting_template"))
         default_prefix = {"thu_tien_gui":"PTG","chi_tien_gui":"PCG","chuyen_tien_noi_bo":"CTNB"}[target]
         voucher_prefix = st.text_input("Tiền tố số chứng từ",value=default_prefix)
         voucher_start = st.number_input("Số thứ tự chứng từ bắt đầu (kiểm tra để tránh trùng)",min_value=1,value=1,step=1)
@@ -268,7 +276,7 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("Quản trị tuổi nợ & tin nhắn nhắc việc")
-    f = st.file_uploader("Danh sách công nợ có ngày đến hạn",["xlsx","xls","csv"],key="aging_file")
+    f = st.file_uploader("Danh sách công nợ có ngày đến hạn",["xlsx","xls","csv"],key=upload_key("aging_file"))
     if st.button("Tính tuổi nợ",disabled=not f):
         try:
             st.session_state["data_aging"] = aging_report(read_upload(f,["Ngày đến hạn","Tên khách hàng","Số tiền"]))
@@ -290,9 +298,9 @@ with tabs[4]:
 
 with tabs[5]:
     st.subheader("Kiểm toán nhanh trước kỳ thuế – Pre-audit")
-    journal = st.file_uploader("Sổ Nhật ký chung",["xlsx","xls","csv"],key="journal")
-    tb = st.file_uploader("Bảng cân đối phát sinh / Trial Balance",["xlsx","xls","csv"],key="trial_balance")
-    register = st.file_uploader("Bảng kê hóa đơn mua vào/bán ra",["xlsx","xls","csv"],key="register")
+    journal = st.file_uploader("Sổ Nhật ký chung",["xlsx","xls","csv"],key=upload_key("journal"))
+    tb = st.file_uploader("Bảng cân đối phát sinh / Trial Balance",["xlsx","xls","csv"],key=upload_key("trial_balance"))
+    register = st.file_uploader("Bảng kê hóa đơn mua vào/bán ra",["xlsx","xls","csv"],key=upload_key("register"))
     opening = st.number_input("Số dư đầu kỳ TK 1111 (VNĐ)",min_value=0.0,step=100000.0)
     cash_threshold = st.number_input("Ngưỡng rà soát thanh toán tiền mặt (VNĐ; 0 = không chạy)",min_value=0,value=0,step=1000000)
     period_end = st.date_input("Ngày kết thúc kỳ kiểm tra",value=date.today())
@@ -316,7 +324,7 @@ with tabs[5]:
 
 with tabs[6]:
     st.subheader("Báo cáo quản trị nhanh cho Giám đốc")
-    cash_file = st.file_uploader("Sao kê thu-chi ngày/tháng",["xlsx","xls","csv"],key="report_cash")
+    cash_file = st.file_uploader("Sao kê thu-chi ngày/tháng",["xlsx","xls","csv"],key=upload_key("report_cash"))
     opening = st.number_input("Số dư đầu kỳ tiền gửi/quỹ (VNĐ)",min_value=0.0,step=100000.0,key="report_opening")
     if st.button("Tổng hợp dòng tiền",disabled=not cash_file):
         try:
@@ -335,11 +343,11 @@ with tabs[6]:
         export("⬇ Tải báo cáo dòng tiền",{"Tong_hop":pd.DataFrame([summary])},"Bao_cao_dong_tien.xlsx","cashflow_export")
     st.divider()
     st.markdown("**Báo cáo lãi lỗ tháng (P&L ước tính)**")
-    gl = st.file_uploader("Sổ chi tiết / Nhật ký chung có ngày, tài khoản Nợ, Có và số tiền",["xlsx","xls","csv"],key="pnl_gl")
+    gl = st.file_uploader("Sổ chi tiết / Nhật ký chung có ngày, tài khoản Nợ, Có và số tiền",["xlsx","xls","csv"],key=upload_key("pnl_gl"))
     pnl_start = st.date_input("Từ ngày",value=date.today().replace(day=1),key="pnl_start")
     pnl_end = st.date_input("Đến ngày",value=date.today(),key="pnl_end")
-    ar_file = st.file_uploader("Bảng công nợ phải thu (không bắt buộc)",["xlsx","xls","csv"],key="pnl_ar")
-    ap_file = st.file_uploader("Bảng công nợ phải trả (không bắt buộc)",["xlsx","xls","csv"],key="pnl_ap")
+    ar_file = st.file_uploader("Bảng công nợ phải thu (không bắt buộc)",["xlsx","xls","csv"],key=upload_key("pnl_ar"))
+    ap_file = st.file_uploader("Bảng công nợ phải trả (không bắt buộc)",["xlsx","xls","csv"],key=upload_key("pnl_ap"))
     if st.button("Lập P&L và Top 5 công nợ",disabled=not gl):
         try:
             journal_df = read_upload(gl,["Tài khoản Nợ","Tài khoản Có","Số tiền"])
@@ -373,7 +381,7 @@ with tabs[7]:
     is_legal_admin = bool(current_user and current_user.id in legal_admin_ids)
     if is_legal_admin:
       with st.expander("Nạp văn bản pháp luật chính thức vào kho dùng chung"):
-        legal_file = st.file_uploader("PDF có text / DOCX / TXT / MD",["pdf","docx","txt","md"],key="legal_file")
+        legal_file = st.file_uploader("PDF có text / DOCX / TXT / MD",["pdf","docx","txt","md"],key=upload_key("legal_file"))
         number = st.text_input("Số hiệu văn bản",key="legal_number")
         title = st.text_input("Tên văn bản",key="legal_title")
         article = st.text_input("Điều/khoản (nếu biết)",key="legal_article")
