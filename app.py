@@ -368,7 +368,7 @@ with tabs[7]:
     legal_admin_ids = {x.strip() for x in get_setting("LEGAL_ADMIN_USER_IDS","").split(",") if x.strip()}
     is_legal_admin = bool(current_user and current_user.id in legal_admin_ids)
     if is_legal_admin:
-      with st.expander("Nạp văn bản pháp luật chính thức vào kho phiên"):
+      with st.expander("Nạp văn bản pháp luật chính thức vào kho dùng chung"):
         legal_file = st.file_uploader("PDF có text / DOCX / TXT / MD",["pdf","docx","txt","md"],key="legal_file")
         number = st.text_input("Số hiệu văn bản",key="legal_number")
         title = st.text_input("Tên văn bản",key="legal_title")
