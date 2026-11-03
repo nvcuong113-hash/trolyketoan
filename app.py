@@ -59,6 +59,28 @@ def export_bytes(label, data, filename, key):
         key=key, use_container_width=True,
         on_click=clear_data if st.session_state.get("clear_after_download", True) else None)
 
+@st.fragment(run_every="3s")
+def payment_status_widget(client, payment_code):
+    try:
+        rows = client.table("payments").select("status,paid_at,plan,amount").eq("payment_code",payment_code).limit(1).execute().data
+        if not rows:
+            st.caption("Đang chờ trạng thái đơn thanh toán…")
+            return
+        row = rows[0]
+        if row["status"] == "paid":
+            st.success(f"Thanh toán thành công · Gói {PLAN_LABELS.get(row['plan'],row['plan'])} đã được kích hoạt.")
+            if st.session_state.get("payment_confirmed_for") != payment_code:
+                st.session_state["payment_confirmed_for"] = payment_code
+                st.rerun()
+        elif row["status"] == "expired":
+            st.warning("Đơn thanh toán đã hết hạn. Hãy tạo đơn mới.")
+        elif row["status"] == "rejected":
+            st.error("Giao dịch chưa được xác nhận do sai số tiền hoặc thông tin đơn.")
+        else:
+            st.info("Đang chờ ngân hàng xác nhận thanh toán. Trạng thái tự cập nhật mỗi 3 giây.")
+    except Exception as exc:
+        st.caption(f"Chưa đọc được trạng thái thanh toán: {exc}")
+
 client = get_public_client()
 current_user = restore_session(client) if client else None
 subscription = None
@@ -439,14 +461,7 @@ with tabs[8]:
                 st.caption("Đơn hết hạn sau 30 phút. Khi webhook SePay xác nhận đúng mã và số tiền, hệ thống kích hoạt gói 30 ngày.")
             else:
                 st.warning("Chưa cấu hình PAYMENT_BANK, PAYMENT_ACCOUNT và PAYMENT_ACCOUNT_HOLDER; chưa thể tạo QR thật.")
-            if st.button("Làm mới trạng thái thanh toán"):
-                st.rerun()
-            try:
-                status_row = client.table("payments").select("status,paid_at,plan,amount").eq("payment_code",order["payment_code"]).limit(1).execute().data
-                if status_row:
-                    st.write("Trạng thái đơn:",status_row[0]["status"])
-            except Exception:
-                pass
+            payment_status_widget(client,order["payment_code"])
     else:
         login_tab,signup_tab = st.tabs(["Đăng nhập","Tạo tài khoản"])
         with login_tab:
