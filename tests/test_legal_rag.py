@@ -1,5 +1,6 @@
 from datetime import date
 from legal_rag import build_legal_index, retrieve_legal_context
+from legal_storage import trusted_official_url
 
 
 def test_legal_rag_only_uses_current_official_documents():
@@ -18,3 +19,10 @@ def test_legal_rag_only_uses_current_official_documents():
     assert index and all(x["number"]=="TT-TEST" for x in index)
     results=retrieve_legal_context(index,"lưu trữ chứng từ kế toán")
     assert results and results[0]["number"]=="TT-TEST"
+
+
+def test_legal_corpus_accepts_only_official_https_domains():
+    assert trusted_official_url("https://vanban.chinhphu.vn/doc")
+    assert trusted_official_url("https://vbpl.moj.gov.vn/doc")
+    assert not trusted_official_url("http://vanban.chinhphu.vn/doc")
+    assert not trusted_official_url("https://example.com/law")
