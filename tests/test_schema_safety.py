@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+from pglast import parse_sql
 
 def test_supabase_schema_has_balanced_dollar_quoted_functions():
     sql=(Path(__file__).resolve().parents[1]/"supabase"/"schema.sql").read_text(encoding="utf-8")
@@ -13,3 +14,9 @@ def test_accounting_data_is_not_persisted_in_supabase_schema():
     sql=(Path(__file__).resolve().parents[1]/"supabase"/"schema.sql").read_text(encoding="utf-8").lower()
     for forbidden in ("bank_statements","customer_invoices","accounting_journals","ledger_entries"):
         assert forbidden not in sql
+
+
+def test_supabase_schema_parses_as_postgresql():
+    sql=(Path(__file__).resolve().parents[1]/"supabase"/"schema.sql").read_text(encoding="utf-8")
+    statements=parse_sql(sql)
+    assert len(statements) >= 20
