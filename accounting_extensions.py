@@ -364,7 +364,10 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
                     cell.value = parse_money(source.get(amount_source, 0))
     out = io.BytesIO()
     wb.save(out)
-    return out.getvalue(), [aliases[k][0] for k in mapping if k in aliases and k not in source_cols and k not in {"so chung tu","ngay hach toan","ngay chung tu"}]
+    special_mapped = {"so chung tu","ngay hach toan","ngay chung tu"}
+    if transaction_type == "chuyen_tien_noi_bo" and find_column(staging.columns,["Số tiền giao dịch","Tiền thu","Tiền chi"]):
+        special_mapped.add("so tien")
+    return out.getvalue(), [aliases[k][0] for k in mapping if k in aliases and k not in source_cols and k not in special_mapped]
 
 
 def build_sepay_qr_url(bank: str, account: str, amount: int, user_id: str,
