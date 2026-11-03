@@ -13,8 +13,9 @@ load_dotenv()
 
 from core import aging_report, build_staging, cashflow_summary, excel_bytes, mask_sensitive, parse_invoice_upload, read_tabular_bytes, reconcile_bank
 from accounting_extensions import advanced_pre_audit, build_executive_pnl, build_sepay_qr_url, map_staging_to_template, reconcile_payables
-from auth_service import get_public_client, restore_session, save_session, sign_in, current_subscription
+from auth_service import get_public_client, get_admin_client, restore_session, save_session, sign_in, current_subscription
 from legal_rag import build_legal_index, retrieve_legal_context, answer_with_openai, make_checklist_xlsx
+from legal_storage import publish_legal_document, load_published_legal_documents
 
 st.set_page_config(page_title="Trợ lý Kế toán SME", page_icon="🧾", layout="wide")
 TTL_SECONDS = 600
@@ -85,7 +86,13 @@ def payment_status_widget(client, payment_code):
         st.caption(f"Chưa đọc được trạng thái thanh toán: {exc}")
 
 client = get_public_client()
+admin_client = get_admin_client()
 current_user = restore_session(client) if client else None
+if "legal_documents" not in st.session_state:
+    try:
+        st.session_state["legal_documents"] = load_published_legal_documents(admin_client) if admin_client else []
+    except Exception:
+        st.session_state["legal_documents"] = []
 subscription = None
 if client and current_user:
     try:
@@ -369,10 +376,17 @@ with tabs[7]:
         effective_to = st.date_input("Ngày hết hiệu lực (để trống nếu chưa xác định)",value=None,key="legal_to")
         status = st.selectbox("Trạng thái do người quản trị xác nhận",["Chưa xác minh","Còn hiệu lực","Hết hiệu lực"])
         source_url = st.text_input("URL nguồn chính thức")
-        if st.button("Thêm văn bản vào kho phiên",disabled=not(legal_file and number and title and source_url)):
-            docs = st.session_state.setdefault("legal_documents",[])
-            docs.append({"filename":legal_file.name,"content":legal_file.getvalue(),"metadata":{"number":number,"title":title,"article":article,"effective_from":effective_from.isoformat(),"effective_to":effective_to.isoformat() if effective_to else None,"status":status,"source_url":source_url}})
-            st.success(f"Đã thêm {number} vào bộ nhớ phiên. Kho này sẽ mất khi phiên bị xóa/hết hạn.")
+        if st.button("Xuất bản văn bản vào kho dùng chung",disabled=not(legal_file and number and title and source_url)):
+            if not admin_client:
+                st.error("Cần cấu hình SUPABASE_SECRET_KEY ở phía server và chạy schema.sql để lưu kho văn bản dùng chung.")
+            else:
+                try:
+                    metadata={"number":number,"title":title,"article":article,"effective_from":effective_from.isoformat(),"effective_to":effective_to.isoformat() if effective_to else None,"status":status,"source_url":source_url}
+                    publish_legal_document(admin_client,legal_file.name,legal_file.getvalue(),metadata,current_user.id)
+                    st.session_state["legal_documents"] = load_published_legal_documents(admin_client)
+                    st.success(f"Đã xuất bản {number} vào kho pháp lý dùng chung.")
+                except Exception as exc:
+                    st.error(f"Không xuất bản được văn bản: {exc}")
     else:
         st.info("Nạp văn bản vào kho chỉ dành cho tài khoản quản trị được cấu hình trong LEGAL_ADMIN_USER_IDS.")
     docs = st.session_state.get("legal_documents",[])
@@ -380,7 +394,7 @@ with tabs[7]:
     if docs:
         try:
             legal_index = build_legal_index(docs)
-            st.caption(f"Đã nạp {len(docs)} văn bản; {len(legal_index)} đoạn đủ điều kiện tìm kiếm theo metadata.")
+            st.caption(f"Đã nạp {len(docs)} văn bản từ kho pháp lý dùng chung; {len(legal_index)} đoạn đủ điều kiện tìm kiếm theo metadata.")
         except Exception as exc:
             st.error(f"Không tạo được kho tra cứu: {exc}")
     question = st.text_area("Câu hỏi nghiệp vụ kế toán/thuế",placeholder="Ví dụ: Hồ sơ cần có khi thanh toán chi phí vận chuyển?")
