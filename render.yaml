@@ -13,3 +13,21 @@ services:
         sync: false
       - key: SEPAY_WEBHOOK_API_KEY
         sync: false
+      - key: SEPAY_WEBHOOK_HMAC_SECRET
+        sync: false
+      - key: PAYMENT_ACCOUNT
+        sync: false
+      - key: BILLING_WORKER_TOKEN
+        sync: false
+  - type: cron
+    name: trolyketoan-payment-queue
+    runtime: python
+    plan: starter
+    schedule: "*/5 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python process_billing_queue.py
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
