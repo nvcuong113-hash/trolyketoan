@@ -104,3 +104,30 @@ def test_reconcile_payables_keeps_partial_balance_visible():
     assert result.iloc[0]["Trạng thái chứng từ"]=="Thanh toán một phần"
     assert result.iloc[0]["Còn phải trả"]==600
     assert missing.empty
+
+
+def test_pnl_respects_selected_accounting_period():
+    journal=pd.DataFrame([
+        {"Ngày hạch toán":"05/01/2026","Tài khoản Nợ":"1121","Tài khoản Có":"5111","Số tiền":100},
+        {"Ngày hạch toán":"05/02/2026","Tài khoản Nợ":"1121","Tài khoản Có":"5111","Số tiền":200},
+    ])
+    result=build_executive_pnl(journal,start_date=date(2026,1,1),end_date=date(2026,1,31))
+    assert result["Doanh thu"]==100
+
+
+def test_pnl_rejects_reversed_date_range():
+    journal=pd.DataFrame([{"Ngày hạch toán":"05/01/2026","Tài khoản Nợ":"1121","Tài khoản Có":"5111","Số tiền":100}])
+    try:
+        build_executive_pnl(journal,start_date=date(2026,2,1),end_date=date(2026,1,1))
+        assert False
+    except ValueError as exc:
+        assert "Ngày bắt đầu" in str(exc)
+
+
+def test_pre_audit_cash_threshold_is_configurable():
+    from core import pre_audit
+    journal=pd.DataFrame([{"Ngày hạch toán":"01/11/2026","Tài khoản Nợ":"642","Tài khoản Có":"1111","Số tiền":6000000,"Diễn giải":"Mua hàng hóa"}])
+    no_threshold=pre_audit(journal,cash_payment_threshold=None)
+    threshold=pre_audit(journal,cash_payment_threshold=5000000)
+    assert not (no_threshold["Nhóm kiểm tra"]=="Rà soát thanh toán không dùng tiền mặt").any()
+    assert (threshold["Nhóm kiểm tra"]=="Rà soát thanh toán không dùng tiền mặt").any()
