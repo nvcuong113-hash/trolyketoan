@@ -60,8 +60,8 @@ def test_xml_zip():
     with zipfile.ZipFile(z,"w") as archive: archive.writestr("invoice.xml",xml)
     result=parse_invoice_upload("invoices.zip",z.getvalue(),"456","Cong ty mua")
     assert result.iloc[0]["Số hóa đơn"]=="001"
-    assert result.iloc[0]["Trạng thái kiểm tra"]=="Cần kiểm tra"
-    assert "dữ liệu mẫu" in result.iloc[0]["Cảnh báo"]
+    assert result.iloc[0]["Trạng thái kiểm tra"]=="Không phát hiện lỗi cơ bản"
+    assert result.iloc[0]["Cảnh báo"]==""
 
 def test_staging_and_payment_matching():
     staging=build_staging(pd.DataFrame([{"Ngày":"01/11/2026","Tiền vào":1000,"Tiền ra":0,"Diễn giải":"Thu tiền khách"}]))
