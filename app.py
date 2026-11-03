@@ -190,6 +190,10 @@ with tabs[2]:
     invoices = st.session_state.get("data_invoices")
     if invoices is not None:
         st.markdown("**Danh sách hóa đơn và trạng thái chứng từ**")
+        m1,m2,m3 = st.columns(3)
+        m1.metric("Đủ chứng từ",int((invoices["Trạng thái chứng từ"]=="Đủ chứng từ").sum()) if "Trạng thái chứng từ" in invoices else 0)
+        m2.metric("Thanh toán một phần",int((invoices["Trạng thái chứng từ"]=="Thanh toán một phần").sum()) if "Trạng thái chứng từ" in invoices else 0)
+        m3.metric("Hóa đơn treo",int((invoices["Trạng thái chứng từ"]=="Hóa đơn treo").sum()) if "Trạng thái chứng từ" in invoices else 0)
         st.dataframe(invoices,use_container_width=True,hide_index=True)
         missing = st.session_state.get("data_missing_docs",pd.DataFrame())
         if not missing.empty:
@@ -317,7 +321,9 @@ with tabs[6]:
         export("⬇ Tải báo cáo dòng tiền",{"Tong_hop":pd.DataFrame([summary])},"Bao_cao_dong_tien.xlsx","cashflow_export")
     st.divider()
     st.markdown("**Báo cáo lãi lỗ tháng (P&L ước tính)**")
-    gl = st.file_uploader("Sổ chi tiết / Nhật ký chung có tài khoản Nợ, Có và số tiền",["xlsx","xls","csv"],key="pnl_gl")
+    gl = st.file_uploader("Sổ chi tiết / Nhật ký chung có ngày, tài khoản Nợ, Có và số tiền",["xlsx","xls","csv"],key="pnl_gl")
+    pnl_start = st.date_input("Từ ngày",value=date.today().replace(day=1),key="pnl_start")
+    pnl_end = st.date_input("Đến ngày",value=date.today(),key="pnl_end")
     ar_file = st.file_uploader("Bảng công nợ phải thu (không bắt buộc)",["xlsx","xls","csv"],key="pnl_ar")
     ap_file = st.file_uploader("Bảng công nợ phải trả (không bắt buộc)",["xlsx","xls","csv"],key="pnl_ap")
     if st.button("Lập P&L và Top 5 công nợ",disabled=not gl):
@@ -325,7 +331,7 @@ with tabs[6]:
             journal_df = read_upload(gl,["Tài khoản Nợ","Tài khoản Có","Số tiền"])
             ar_df = read_upload(ar_file,["Tên khách hàng","Còn phải thu"]) if ar_file else None
             ap_df = read_upload(ap_file,["Tên nhà cung cấp","Còn phải trả"]) if ap_file else None
-            st.session_state["data_pnl"] = build_executive_pnl(journal_df,ar_df,ap_df)
+            st.session_state["data_pnl"] = build_executive_pnl(journal_df,ar_df,ap_df,pnl_start,pnl_end)
         except Exception as exc:
             st.error(str(exc))
     pnl = st.session_state.get("data_pnl")
