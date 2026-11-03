@@ -446,7 +446,9 @@ def build_staging(transactions: pd.DataFrame, standard: str = "99") -> pd.DataFr
         rows.append({
             "trans_id": str(uuid.uuid4()), "Ngày": pd.to_datetime(row[date_col], errors="coerce", dayfirst=True) if date_col else pd.NaT,
             "Đối tác": "", "Diễn giải gốc": desc, "Diễn giải chuẩn": note,
-            "Tiền thu": incoming, "Tiền chi": outgoing, "Tài khoản Nợ": debit, "Tài khoản Có": credit,
+            "Loại chứng từ": "Thu tiền gửi" if incoming > 0 else "Chi tiền gửi" if outgoing > 0 else "Chưa phân loại",
+            "Tiền thu": incoming, "Tiền chi": outgoing, "Số tiền giao dịch": max(incoming,outgoing),
+            "Tài khoản Nợ": debit, "Tài khoản Có": credit, "Tài khoản đi": "", "Tài khoản đến": "",
             "Mã hóa đơn": "", "Chưa đủ chứng từ": False, "Chế độ": f"TT {standard_label}"
         })
     return pd.DataFrame(rows)
