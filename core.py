@@ -431,11 +431,12 @@ def suggest_account(description: str, direction: str, cash_account: str = "1121"
     return "", "", "Chưa đủ thông tin để gợi ý định khoản"
 
 
-def build_staging(transactions: pd.DataFrame, standard: str = "133") -> pd.DataFrame:
+def build_staging(transactions: pd.DataFrame, standard: str = "99") -> pd.DataFrame:
     date_col = find_column(transactions.columns, ["Ngày giao dịch", "Ngày", "Ngày hạch toán", "Date"])
     in_col = find_column(transactions.columns, ["Tiền vào", "Số tiền ghi Có", "Ghi Có", "amount_in", "Credit"])
     out_col = find_column(transactions.columns, ["Tiền ra", "Số tiền ghi Nợ", "Ghi Nợ", "amount_out", "Debit"])
     desc_col = find_column(transactions.columns, ["Nội dung", "Diễn giải", "Description"])
+    standard_label = "200 (kỳ tài chính bắt đầu trước 2026)" if standard == "200-transition" else standard
     rows = []
     for _, row in transactions.iterrows():
         incoming = parse_money(row[in_col]) if in_col else 0
@@ -446,7 +447,7 @@ def build_staging(transactions: pd.DataFrame, standard: str = "133") -> pd.DataF
             "trans_id": str(uuid.uuid4()), "Ngày": pd.to_datetime(row[date_col], errors="coerce", dayfirst=True) if date_col else pd.NaT,
             "Đối tác": "", "Diễn giải gốc": desc, "Diễn giải chuẩn": note,
             "Tiền thu": incoming, "Tiền chi": outgoing, "Tài khoản Nợ": debit, "Tài khoản Có": credit,
-            "Mã hóa đơn": "", "Chưa đủ chứng từ": False, "Chế độ": f"TT {standard}"
+            "Mã hóa đơn": "", "Chưa đủ chứng từ": False, "Chế độ": f"TT {standard_label}"
         })
     return pd.DataFrame(rows)
 
