@@ -119,9 +119,9 @@ def build_executive_pnl(journal: pd.DataFrame, receivables: pd.DataFrame | None 
 
 def advanced_pre_audit(journal: pd.DataFrame, trial_balance: pd.DataFrame | None = None,
                        invoice_register: pd.DataFrame | None = None, opening_cash: float = 0.0,
-                       period_end: date | None = None) -> pd.DataFrame:
+                       period_end: date | None = None, cash_payment_threshold: int | None = None) -> pd.DataFrame:
     from core import pre_audit
-    base = pre_audit(journal, invoice_register, opening_cash)
+    base = pre_audit(journal, invoice_register, opening_cash, cash_payment_threshold)
     findings = base.to_dict("records")
     date_col = find_column(journal.columns, ["Ngày hạch toán", "Ngày chứng từ", "Ngày", "Date"])
     debit_col = find_column(journal.columns, ["Tài khoản Nợ", "TK Nợ", "Debit account"], required=True)
