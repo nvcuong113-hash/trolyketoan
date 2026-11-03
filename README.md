@@ -57,7 +57,7 @@ pytest -q
 - FR-08: Supabase Auth, gói thuê bao, tạo payment order, QR, SePay webhook và kích hoạt subscription.
 
 ## Giới hạn / việc cần nghiệm thu với dữ liệu thật
-- MISA: mỗi loại chứng từ dùng mẫu Excel riêng; cần tải mẫu chính xác từ phiên bản đang dùng để mapping. MISA SME 2026 nêu các cột bắt buộc cơ bản gồm ngày hạch toán, ngày chứng từ, số chứng từ; dữ liệu còn lại phải map theo mẫu.
+- MISA: mỗi loại chứng từ dùng mẫu Excel riêng; cần tải mẫu chính xác từ phiên bản đang dùng để mapping. MISA SME 2026 nêu các cột bắt buộc cho Thu tiền gửi và Chi tiền gửi gồm ngày hạch toán, ngày chứng từ, số chứng từ. Chương trình không hỗ trợ nhập trực tiếp file sao kê ngân hàng; cần tách Thu tiền gửi, Chi tiền gửi và Chuyển tiền nội bộ thành từng file mẫu riêng.
 - VACOM: chưa có file mẫu thực tế nên chỉ hỗ trợ mapping theo header của file mẫu do người dùng tải lên, chưa xác nhận khả năng import end-to-end.
 - Chữ ký số XML chưa được xác thực mật mã; chưa kết nối tra cứu trạng thái hóa đơn trên cổng Thuế.
 - Legal corpus chưa được đóng gói sẵn và chưa có người kiểm duyệt pháp lý duyệt toàn bộ metadata. Không bật kết luận nếu không có văn bản phù hợp.
