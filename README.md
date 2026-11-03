@@ -39,11 +39,11 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 - Đặt OPENAI_API_KEY phía server Streamlit; OPENAI_MODEL mặc định gpt-4o-mini.
 - Nạp file PDF có text / DOCX / TXT / MD của văn bản pháp luật chính thức.
 - Điền số hiệu, ngày hiệu lực và URL nguồn; chỉ chọn "Còn hiệu lực" khi đã kiểm chứng.
-- Kho tài liệu hiện lưu trong session RAM; chưa có quy trình admin publish corpus bền vững vào bản deploy.
+- Tài khoản quản trị được allowlist bằng LEGAL_ADMIN_USER_IDS có thể xuất bản văn bản vào private Supabase Storage; mọi phiên người dùng chỉ tải các văn bản còn hiệu lực để truy xuất. Cần SUPABASE_SECRET_KEY phía server.
 
 ## Kiểm thử
 ```bash
-python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py
+python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py legal_storage.py process_billing_queue.py
 pytest -q
 ```
 
