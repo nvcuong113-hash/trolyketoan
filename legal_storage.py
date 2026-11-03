@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
+from datetime import date
 from typing import Any
 from urllib.parse import urlparse
 
@@ -52,11 +53,14 @@ def publish_legal_document(client, filename: str, content: bytes, metadata: dict
 
 
 def load_published_legal_documents(client) -> list[dict[str, Any]]:
+    today=date.today().isoformat()
     rows=client.table("legal_documents").select(
         "number,title,article,effective_from,effective_to,status,source_url,storage_path,filename"
-    ).order("number").execute().data or []
+    ).eq("status","Còn hiệu lực").lte("effective_from",today).order("number").execute().data or []
     documents=[]
     for row in rows:
+        if row.get("effective_to") and row["effective_to"] < today:
+            continue
         try:
             content=client.storage.from_("legal-corpus").download(row["storage_path"])
             documents.append({
