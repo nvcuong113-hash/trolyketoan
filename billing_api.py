@@ -9,6 +9,9 @@ from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from supabase import create_client
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(title="TroLyKeToan Billing Webhook", docs_url=None, redoc_url=None)
 
