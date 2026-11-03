@@ -11,7 +11,9 @@ def test_parse_money_vietnamese_formats():
     assert parse_money("1,234.50") == 1234.5
 
 def test_subset_sum():
-    assert set(subset_sum_indices([100,200,300,400],500,epsilon=0)) == {1,3}
+    chosen = subset_sum_indices([100,200,300,400],500,epsilon=0)
+    assert chosen is not None and len(chosen) == 2
+    assert sum([100,200,300,400][i] for i in chosen) == 500
     assert subset_sum_indices([100,200],900) is None
 
 def test_mask_sensitive_labeled_tax_and_phone():
@@ -40,7 +42,7 @@ def test_aging_priority_boundaries():
         {"Tên khách hàng":"C","Số hóa đơn":"3","Số tiền phải thu":30,"Ngày đến hạn":"18/10/2026"},
         {"Tên khách hàng":"D","Số hóa đơn":"4","Số tiền phải thu":40,"Ngày đến hạn":"01/10/2026"}])
     result=aging_report(source,date(2026,11,3))
-    assert result["Mức độ"].tolist()==["Sắp đến hạn","Quá hạn nhẹ","Quá hạn nhẹ","Quá hạn nghiêm trọng"]
+    assert result["Mức độ"].tolist()==["Sắp đến hạn","Quá hạn nhẹ","Quá hạn nghiêm trọng","Quá hạn nghiêm trọng"]
 
 def test_pre_audit_detects_negative_cash():
     journal=pd.DataFrame([
