@@ -43,6 +43,19 @@ if now - st.session_state.get("_last_activity", now) > TTL_SECONDS:
     st.toast("Phiên làm việc đã quá 10 phút không hoạt động; dữ liệu tạm đã được xóa.", icon="🧹")
 st.session_state["_last_activity"] = now
 
+@st.fragment(run_every="30s")
+def inactivity_guard():
+    last = st.session_state.get("_last_activity",time.time())
+    if time.time()-last > TTL_SECONDS:
+        clear_data()
+        st.session_state["_last_activity"] = time.time()
+        st.session_state["_session_expired"] = True
+        st.rerun()
+
+inactivity_guard()
+if st.session_state.pop("_session_expired",False):
+    st.toast("Phiên đã hết hạn do không hoạt động; tệp và dữ liệu tạm đã được xóa.",icon="🧹")
+
 def get_setting(name, default=""):
     value = os.getenv(name)
     if value:
