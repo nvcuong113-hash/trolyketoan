@@ -62,3 +62,11 @@ def current_subscription(client: Client):
         except Exception:
             continue
     return None
+
+
+def get_admin_client() -> Client | None:
+    url = _setting("SUPABASE_URL")
+    secret = _setting("SUPABASE_SECRET_KEY") or _setting("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not secret:
+        return None
+    return create_client(url, secret)
