@@ -159,3 +159,13 @@ def test_sepay_uses_dedicated_code_field_when_content_omits_it():
         "code":"TKPROABC12345678","content":"chuyen tien"
     })
     assert "TKPROABC12345678" in event["content"]
+
+
+def test_management_report_pdf_is_generated_in_memory():
+    from reports import management_report_pdf
+    data=management_report_pdf({
+        "Tồn đầu kỳ":1000,"Tổng thu":5000,"Tổng chi":2000,
+        "Dòng tiền thuần":3000,"Tồn cuối kỳ":4000
+    })
+    assert data.startswith(b"%PDF")
+    assert len(data)>1000
