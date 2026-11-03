@@ -29,6 +29,15 @@ if now - st.session_state.get("_last_activity", now) > TTL_SECONDS:
     st.toast("Phiên làm việc đã quá 10 phút không hoạt động; dữ liệu tạm đã được xóa.", icon="🧹")
 st.session_state["_last_activity"] = now
 
+def get_setting(name, default=""):
+    value = os.getenv(name)
+    if value:
+        return value
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
 def read_upload(file, aliases=()):
     return read_tabular_bytes(file.name, file.getvalue(), aliases) if file else None
 
@@ -309,7 +318,10 @@ with tabs[6]:
 with tabs[7]:
     st.subheader("Cố vấn nghiệp vụ & pháp lý thuế có kiểm chứng")
     st.warning("Chỉ tài liệu có metadata hiệu lực và được người quản trị xác nhận mới được tìm kiếm. Hệ thống không tự xác minh hiệu lực của file tải lên.")
-    with st.expander("Nạp văn bản pháp luật chính thức vào kho phiên"):
+    legal_admin_ids = {x.strip() for x in get_setting("LEGAL_ADMIN_USER_IDS","").split(",") if x.strip()}
+    is_legal_admin = bool(current_user and current_user.id in legal_admin_ids)
+    if is_legal_admin:
+      with st.expander("Nạp văn bản pháp luật chính thức vào kho phiên"):
         legal_file = st.file_uploader("PDF có text / DOCX / TXT / MD",["pdf","docx","txt","md"],key="legal_file")
         number = st.text_input("Số hiệu văn bản",key="legal_number")
         title = st.text_input("Tên văn bản",key="legal_title")
@@ -322,6 +334,8 @@ with tabs[7]:
             docs = st.session_state.setdefault("legal_documents",[])
             docs.append({"filename":legal_file.name,"content":legal_file.getvalue(),"metadata":{"number":number,"title":title,"article":article,"effective_from":effective_from.isoformat(),"effective_to":effective_to.isoformat() if effective_to else None,"status":status,"source_url":source_url}})
             st.success(f"Đã thêm {number} vào bộ nhớ phiên. Kho này sẽ mất khi phiên bị xóa/hết hạn.")
+    else:
+        st.info("Nạp văn bản vào kho chỉ dành cho tài khoản quản trị được cấu hình trong LEGAL_ADMIN_USER_IDS.")
     docs = st.session_state.get("legal_documents",[])
     legal_index = []
     if docs:
@@ -335,10 +349,10 @@ with tabs[7]:
         masked_question = mask_sensitive(question)
         matches = retrieve_legal_context(legal_index,masked_question,5)
         st.session_state["result_legal_matches"] = matches
-        api_key = os.getenv("OPENAI_API_KEY","")
+        api_key = get_setting("OPENAI_API_KEY","")
         if matches and api_key:
             try:
-                st.session_state["result_legal_answer"] = answer_with_openai(masked_question,matches,api_key,os.getenv("OPENAI_MODEL","gpt-4o-mini"))
+                st.session_state["result_legal_answer"] = answer_with_openai(masked_question,matches,api_key,get_setting("OPENAI_MODEL","gpt-4o-mini"))
             except Exception as exc:
                 st.session_state["result_legal_answer"] = f"Không gọi được mô hình AI: {exc}. Chỉ hiển thị trích đoạn nguồn."
         elif not matches:
@@ -406,10 +420,10 @@ with tabs[8]:
         if order:
             st.metric("Số tiền cần thanh toán",f"{int(order['amount']):,} VNĐ")
             st.code(order["payment_code"])
-            bank = os.getenv("PAYMENT_BANK","")
-            account = os.getenv("PAYMENT_ACCOUNT","")
-            holder = os.getenv("PAYMENT_ACCOUNT_HOLDER","")
-            require_sevqr = os.getenv("PAYMENT_REQUIRE_SEVQR","false").lower()=="true"
+            bank = get_setting("PAYMENT_BANK","")
+            account = get_setting("PAYMENT_ACCOUNT","")
+            holder = get_setting("PAYMENT_ACCOUNT_HOLDER","")
+            require_sevqr = get_setting("PAYMENT_REQUIRE_SEVQR","false").lower()=="true"
             if bank and account:
                 qr_url = build_sepay_qr_url(bank,account,int(order["amount"]),order["payment_code"],holder,require_sevqr)
                 st.image(qr_url,caption="Quét mã bằng ứng dụng ngân hàng. Giữ nguyên nội dung chuyển khoản.",width=280)
