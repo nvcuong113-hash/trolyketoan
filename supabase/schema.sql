@@ -150,7 +150,7 @@ begin
     where user_id=v_user and status='active' and expires_at>now()
     order by expires_at desc limit 1 for update;
   if not found then raise exception 'No active subscription'; end if;
-  select array_agg(distinct regexp_replace(trim(x), '\\s+', '', 'g'))
+  select array_agg(distinct regexp_replace(trim(x), '\s+', '', 'g'))
     into v_codes from unnest(coalesce(p_tax_codes, '{}'::text[])) x
     where trim(x) <> '';
   v_codes := coalesce(v_codes, '{}'::text[]);
