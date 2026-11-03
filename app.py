@@ -18,8 +18,10 @@ TTL_SECONDS = 600
 PLAN_LABELS = {"internal": "Kế toán Nội bộ", "service": "Kế toán Dịch vụ"}
 
 def clear_data():
+    # Keep only authentication and inactivity timestamp; remove uploader widget
+    # state as well as parsed frames/results from the session.
     for key in list(st.session_state.keys()):
-        if key.startswith(("data_", "result_", "legal_")) or key == "last_payment_order":
+        if key not in {"auth_session", "_last_activity"}:
             del st.session_state[key]
     gc.collect()
 
@@ -46,14 +48,16 @@ def export(label, sheets, filename, key):
     limited = {name: frame if premium else frame.head(50) for name,frame in sheets.items()}
     st.download_button(label, data=excel_bytes(limited), file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=key, use_container_width=True)
+        key=key, use_container_width=True,
+        on_click=clear_data if st.session_state.get("clear_after_download", True) else None)
     if not premium:
         st.caption("Tài khoản khách: file tải xuống giới hạn 50 dòng đầu mỗi sheet; thống kê trên màn hình vẫn tính toàn bộ dữ liệu.")
 
 def export_bytes(label, data, filename, key):
     st.download_button(label, data=data, file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=key, use_container_width=True)
+        key=key, use_container_width=True,
+        on_click=clear_data if st.session_state.get("clear_after_download", True) else None)
 
 client = get_public_client()
 current_user = restore_session(client) if client else None
@@ -79,6 +83,7 @@ with st.sidebar:
     st.markdown("### Không gian làm việc")
     st.info("Tệp kế toán chỉ xử lý tạm trong bộ nhớ phiên; không ghi sổ kế toán vào database.")
     st.caption("Phiên tạm tự kiểm tra timeout sau 10 phút không hoạt động.")
+    st.checkbox("Tự xóa file và dữ liệu tạm sau khi tải xuống",value=True,key="clear_after_download")
     if st.button("🧹 Xóa dữ liệu nghiệp vụ", use_container_width=True):
         clear_data()
         st.rerun()
