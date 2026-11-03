@@ -264,11 +264,12 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
                             voucher_prefix: str | None = None,
                             voucher_start: int = 1) -> tuple[bytes, list[str]]:
     """Fill an uploaded MISA/VACOM template while retaining its worksheets and formatting."""
-    if transaction_type not in {"thu_tien_gui", "chi_tien_gui"}:
-        raise ValueError("Loại chứng từ phải là thu_tien_gui hoặc chi_tien_gui. Mỗi loại dùng một mẫu riêng.")
+    if transaction_type not in {"thu_tien_gui", "chi_tien_gui", "chuyen_tien_noi_bo"}:
+        raise ValueError("Loại chứng từ không hợp lệ. Chọn Thu tiền gửi, Chi tiền gửi hoặc Chuyển tiền nội bộ.")
     if voucher_start < 1:
         raise ValueError("Số chứng từ bắt đầu phải lớn hơn 0.")
-    voucher_prefix = (voucher_prefix or ("PTG" if transaction_type == "thu_tien_gui" else "PCG")).strip()
+    default_prefix = {"thu_tien_gui":"PTG","chi_tien_gui":"PCG","chuyen_tien_noi_bo":"CTNB"}[transaction_type]
+    voucher_prefix = (voucher_prefix or default_prefix).strip()
     if not voucher_prefix or len(voucher_prefix) > 12:
         raise ValueError("Tiền tố số chứng từ không hợp lệ.")
     wb = load_workbook(io.BytesIO(template_bytes))
@@ -281,7 +282,9 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
         "dien giai": ("Diễn giải", "Diễn giải chuẩn", "Diễn giải gốc", "Nội dung", "Description"),
         "tai khoan no": ("Tài khoản Nợ", "TK Nợ", "Tài khoản hạch toán Nợ"),
         "tai khoan co": ("Tài khoản Có", "TK Có", "Tài khoản hạch toán Có"),
-        "so tien": ("Số tiền", "Số tiền thu", "Số tiền chi", "Tiền thu", "Tiền chi", "Số tiền quy đổi"),
+        "so tien": ("Số tiền", "Số tiền thu", "Số tiền chi", "Tiền thu", "Tiền chi", "Số tiền giao dịch", "Số tiền quy đổi"),
+        "tai khoan di": ("Tài khoản đi", "Tài khoản chuyển đi", "Tài khoản nguồn"),
+        "tai khoan den": ("Tài khoản đến", "Tài khoản nhận", "Tài khoản chuyển đến"),
         "ma hoa don": ("Số hóa đơn", "Mã hóa đơn", "Invoice number"),
         "ma so thue": ("Mã số thuế", "MST", "Tax code"),
     }
@@ -290,12 +293,15 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
         "so chung tu": (), "ma doi tuong": ("Mã đối tượng",),
         "ten doi tuong": ("Đối tác",), "dien giai": ("Diễn giải chuẩn", "Diễn giải gốc"),
         "tai khoan no": ("Tài khoản Nợ",), "tai khoan co": ("Tài khoản Có",),
-        "so tien": ("Tiền thu",) if transaction_type == "thu_tien_gui" else ("Tiền chi",),
+        "so tien": ("Tiền thu",) if transaction_type == "thu_tien_gui" else ("Tiền chi",) if transaction_type == "chi_tien_gui" else (),
+        "tai khoan di": ("Tài khoản đi",), "tai khoan den": ("Tài khoản đến",),
         "ma hoa don": ("Mã hóa đơn",), "ma so thue": ("Mã số thuế",),
     }
     # MISA SME 2026 documents only these three mandatory mappings for bank receipts/payments.
     # Other mapped fields are retained when present in the user's actual template.
     required = {"ngay hach toan", "ngay chung tu", "so chung tu"}
+    if transaction_type == "chuyen_tien_noi_bo":
+        required.update({"tai khoan di","tai khoan den"})
     chosen_sheet, header_row, mapping, best_score = None, None, None, -1
     for ws in wb.worksheets:
         for row_idx in range(1, min(ws.max_row, 40)+1):
@@ -323,7 +329,15 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
                 source_cols[key] = col
     amount_source = "Tiền thu" if transaction_type == "thu_tien_gui" else "Tiền chi"
     rows = staging.copy()
-    if amount_source in rows.columns:
+    type_col = find_column(rows.columns, ["Loại chứng từ"])
+    expected_type = {"thu_tien_gui":"Thu tiền gửi","chi_tien_gui":"Chi tiền gửi","chuyen_tien_noi_bo":"Chuyển tiền nội bộ"}[transaction_type]
+    if type_col:
+        rows = rows[rows[type_col].fillna("").astype(str).str.strip().str.casefold() == expected_type.casefold()]
+    if transaction_type == "chuyen_tien_noi_bo":
+        amount_col = find_column(rows.columns, ["Số tiền giao dịch","Tiền thu","Tiền chi"])
+        if amount_col:
+            rows = rows[rows[amount_col].map(parse_money) > 0]
+    elif amount_source in rows.columns:
         rows = rows[rows[amount_source].map(parse_money) > 0]
     rows = rows[~rows.get("Chưa đủ chứng từ", pd.Series(False, index=rows.index)).fillna(False).astype(bool)]
     # MISA SME imports bank receipts and payments as separate voucher types/files.
@@ -344,7 +358,10 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
             elif key in {"ngay hach toan", "ngay chung tu"}:
                 cell.value = source.get("Ngày")
             elif key == "so tien":
-                cell.value = parse_money(source.get(amount_source, 0))
+                if transaction_type == "chuyen_tien_noi_bo":
+                    cell.value = parse_money(source.get("Số tiền giao dịch",max(parse_money(source.get("Tiền thu",0)),parse_money(source.get("Tiền chi",0)))))
+                else:
+                    cell.value = parse_money(source.get(amount_source, 0))
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue(), [aliases[k][0] for k in mapping if k in aliases and k not in source_cols and k not in {"so chung tu","ngay hach toan","ngay chung tu"}]
