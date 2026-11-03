@@ -82,3 +82,25 @@ def test_sepay_hmac_verification_and_replay_window():
     signature="sha256="+digest
     assert verify_hmac(raw,signature,timestamp,secret,now=1793700000)
     assert not verify_hmac(raw,signature,timestamp,secret,now=1793701000)
+
+
+def test_reconcile_payables_accumulates_partial_payments():
+    invoices=pd.DataFrame([{"Tên người bán":"NCC A","Số hóa đơn":"A01","Tổng thanh toán":1000}])
+    payments=pd.DataFrame([
+        {"Ngày giao dịch":"01/11/2026","Số tiền ghi Nợ":400,"Nội dung":"Thanh toan NCC A"},
+        {"Ngày giao dịch":"02/11/2026","Số tiền ghi Nợ":600,"Nội dung":"Thanh toan NCC A"},
+    ])
+    result,missing=reconcile_payables(invoices,payments,date(2026,11,3),epsilon=0)
+    assert result.iloc[0]["Trạng thái chứng từ"]=="Đủ chứng từ"
+    assert result.iloc[0]["Số đã thanh toán"]==1000
+    assert result.iloc[0]["Còn phải trả"]==0
+    assert missing.empty
+
+
+def test_reconcile_payables_keeps_partial_balance_visible():
+    invoices=pd.DataFrame([{"Tên người bán":"NCC A","Số hóa đơn":"A01","Tổng thanh toán":1000}])
+    payments=pd.DataFrame([{"Ngày giao dịch":"01/11/2026","Số tiền ghi Nợ":400,"Nội dung":"Thanh toan NCC A"}])
+    result,missing=reconcile_payables(invoices,payments,date(2026,11,3),epsilon=0)
+    assert result.iloc[0]["Trạng thái chứng từ"]=="Thanh toán một phần"
+    assert result.iloc[0]["Còn phải trả"]==600
+    assert missing.empty
