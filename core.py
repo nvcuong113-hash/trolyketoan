@@ -136,12 +136,13 @@ def excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
 
 def mask_sensitive(text: object) -> str:
     value = str(text or "")
-    # Phone numbers first, before the generic bank-account pattern.
+    # Labeled identifiers take precedence because a 10-digit phone and tax code
+    # can share the same shape. Unlabeled 0xxxxxxxxx values are treated as phones.
+    value = re.sub(r"(?i)(\bMST\s*[:#-]?\s*)\d{10}(?:\d{3})?\b", r"\1[MST]", value)
+    value = re.sub(r"(?i)(\b(?:SDT|điện thoại|phone)\s*[:#-]?\s*)0\d{9}\b", r"\1[SDT]", value)
     value = re.sub(r"(?<!\d)0\d{9}(?!\d)", "[SDT]", value)
-    value = re.sub(r"(?<!\d)\d{10}(?:\d{3})?(?!\d)", "[MST]", value)
     value = re.sub(r"(?<!\d)\d{8,16}(?!\d)", "[STK_BANK]", value)
     return value
-
 
 def subset_sum_indices(amounts: Iterable[object], target: object, epsilon: int = EPSILON_VND,
                        max_items: int = MAX_COMBINATION_SIZE) -> list[int] | None:
