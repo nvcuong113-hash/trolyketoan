@@ -68,3 +68,14 @@ def test_staging_and_payment_matching():
     inv=pd.DataFrame([{"Tổng thanh toán":1000,"Tên người bán":"NCC A"}])
     pay=pd.DataFrame([{"Số tiền ghi Nợ":1000,"Nội dung":"Thanh toan NCC A"}])
     assert classify_invoice_payments(inv,pay).iloc[0]["Trạng thái thanh toán"]=="Đã tìm thấy khoản chi tương ứng"
+
+
+def test_reconcile_does_not_auto_match_ambiguous_same_partner_same_amount():
+    bank=pd.DataFrame([{"Ngày giao dịch":"03/11/2026","Số tiền ghi Có":1000,"Nội dung giao dịch":"CTY ABC thanh toan cong no"}])
+    invoices=pd.DataFrame([
+        {"Tên khách hàng":"CTY ABC","Mã khách hàng":"ABC","Số hóa đơn":"HD01","Số tiền phải thu":1000},
+        {"Tên khách hàng":"CTY ABC","Mã khách hàng":"ABC","Số hóa đơn":"HD02","Số tiền phải thu":1000},
+    ])
+    result,unmatched=reconcile_bank(bank,invoices,epsilon=0)
+    assert result.iloc[0]["Kết quả"]=="Chưa xác định"
+    assert len(unmatched)==2
