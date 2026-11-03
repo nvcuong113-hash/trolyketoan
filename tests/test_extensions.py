@@ -151,3 +151,11 @@ def test_template_mapping_internal_transfer_accounts_and_amount():
     assert row[2]=="CTNB000005"
     assert row[3]=="1121" and row[4]=="1122" and row[5]==2500000
     assert "Số tiền" not in missing
+
+
+def test_sepay_uses_dedicated_code_field_when_content_omits_it():
+    event=parse_sepay_event({
+        "id":124,"transferAmount":69000,"transferType":"in",
+        "code":"TKPROABC12345678","content":"chuyen tien"
+    })
+    assert "TKPROABC12345678" in event["content"]
