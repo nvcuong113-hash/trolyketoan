@@ -32,8 +32,9 @@
 <section class="wrap section"><h2>Nguyên tắc bảo vệ dữ liệu</h2><p>Tệp sao kê, hóa đơn và sổ kế toán được xử lý tạm trong bộ nhớ phiên; không lưu vào cơ sở dữ liệu sổ sách. Hệ thống chỉ dùng cơ sở dữ liệu cho tài khoản, gói dịch vụ và lịch sử thanh toán. Kết quả tự động là gợi ý, kế toán cần kiểm tra chứng từ và căn cứ pháp lý trước khi ghi sổ hoặc kê khai.</p></section>
 </main>
 <footer><div class="wrap">Trợ lý Kế toán SME · Thông tin giới thiệu sản phẩm · Không thay thế tư vấn kế toán/thuế chuyên môn.</div></footer>
+<script src="/config.js"></script>
 <script>
-const appUrl="";
+const appUrl=window.TROLY_APP_URL||"";
 if(appUrl){const link=document.getElementById("open-app");link.href=appUrl;link.removeAttribute("aria-disabled");document.getElementById("app-note").textContent="Mở công cụ xử lý tệp."; }else{document.getElementById("open-app").addEventListener("click",e=>{e.preventDefault();});}
 </script>
 </body></html>
