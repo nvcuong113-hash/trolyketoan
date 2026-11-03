@@ -146,7 +146,7 @@ with tabs[1]:
     left,right = st.columns(2)
     bank = left.file_uploader("1. Sao kê ngân hàng",["xlsx","xls","csv"],key="bank")
     ar = right.file_uploader("2. Danh sách công nợ phải thu",["xlsx","xls","csv"],key="ar")
-    threshold = st.slider("Ngưỡng tương đồng tên đối tác",0.60,1.00,0.80,0.01)
+    threshold = st.slider("Ngưỡng khớp từ khóa đối tác",0.60,1.00,0.80,0.01)
     epsilon = st.number_input("Sai số ghép hóa đơn (VNĐ)",0,100000,1000,100)
     if st.button("🔎 Thực hiện đối soát",type="primary",disabled=not(bank and ar)):
         try:
