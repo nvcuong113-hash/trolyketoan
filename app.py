@@ -278,13 +278,18 @@ with tabs[3]:
                 rows_for_import = edited if st.session_state.get("active_subscription") else edited.head(50)
                 mapped,missing_fields = map_staging_to_template(rows_for_import,template.getvalue(),target,voucher_prefix,int(voucher_start))
                 st.session_state["result_mapped_template"] = mapped
-                if not st.session_state.get("active_subscription"):
-                    st.caption("Gói khách: file import theo mẫu giới hạn 50 dòng đầu.")
+                st.session_state["result_template_generated_premium"] = bool(st.session_state.get("active_subscription"))
                 st.session_state["result_template_missing"] = missing_fields
                 st.success("Đã tạo file trên cấu trúc mẫu được tải lên.")
             except Exception as exc:
                 st.error(str(exc))
+        if st.session_state.get("result_mapped_template") and not st.session_state.get("active_subscription") and st.session_state.get("result_template_generated_premium"):
+            st.session_state.pop("result_mapped_template",None)
+            st.session_state.pop("result_template_missing",None)
+            st.session_state.pop("result_template_generated_premium",None)
         if st.session_state.get("result_mapped_template"):
+            if not st.session_state.get("active_subscription"):
+                st.caption("Gói khách: file import theo mẫu giới hạn 50 dòng đầu.")
             if st.session_state.get("result_template_missing"):
                 st.warning("Một số cột mẫu chưa có dữ liệu ánh xạ: "+", ".join(st.session_state["result_template_missing"]))
             export_bytes("⬇ Tải file đã ánh xạ theo mẫu",st.session_state["result_mapped_template"],f"Import_{target}.xlsx","mapped_template_export")
