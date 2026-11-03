@@ -9,7 +9,7 @@ Trợ lý quy trình kế toán cho doanh nghiệp nhỏ tại Việt Nam. Xử 
 - Accounting processing core: core.py and accounting_extensions.py.
 - Supabase: account, profile, subscription and payment metadata only. Never stores customer accounting ledgers or uploaded source files.
 - FastAPI billing webhook: billing_api.py.
-- Legal retrieval: legal_rag.py, only from documents explicitly marked current and within effective dates.
+- Legal retrieval: legal_rag.py + legal_storage.py. Official public legal documents are stored in private Supabase Storage, with metadata in legal_documents; only administrator-published, current documents within effective dates are retrieved.
 
 ## Modules
 - FR-01: bank statement reconciliation, exact invoice matching and same-customer subset matching.
