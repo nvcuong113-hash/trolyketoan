@@ -16,6 +16,7 @@ from accounting_extensions import advanced_pre_audit, build_executive_pnl, build
 from auth_service import get_public_client, get_admin_client, restore_session, save_session, sign_in, current_subscription
 from legal_rag import build_legal_index, retrieve_legal_context, answer_with_openai, make_checklist_xlsx
 from legal_storage import publish_legal_document, load_published_legal_documents
+from sample_data import sample_workbook, sample_xml_zip, sample_legal_questions
 
 st.set_page_config(page_title="Trợ lý Kế toán SME", page_icon="🧾", layout="wide")
 TTL_SECONDS = 600
@@ -67,6 +68,22 @@ def get_setting(name, default=""):
 
 def read_upload(file, aliases=()):
     return read_tabular_bytes(file.name, file.getvalue(), aliases) if file else None
+
+
+def download_sample_excel(label, module, key, sheet=None):
+    sheets = sample_workbook(module)
+    if sheet:
+        sheets = {sheet: sheets[sheet]}
+    st.download_button(label, data=excel_bytes(sheets),
+        file_name=f"Du_lieu_mau_{module.upper()}_{(sheet or 'ALL').replace(' ','_')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key, use_container_width=True,
+        on_click=clear_data if st.session_state.get("clear_after_download", True) else None)
+
+def download_sample_bytes(label, data, filename, mime, key):
+    st.download_button(label, data=data, file_name=filename, mime=mime,
+        key=key, use_container_width=True,
+        on_click=clear_data if st.session_state.get("clear_after_download", True) else None)
 
 def export(label, sheets, filename, key):
     premium = bool(st.session_state.get("active_subscription"))
@@ -166,6 +183,9 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("Đối soát sao kê ngân hàng & ghép hóa đơn trả gộp")
+    sample_cols = st.columns(2)
+    with sample_cols[0]: download_sample_excel("⬇ File mẫu sao kê", "fr01", "sample_fr01_bank", "Sao_ke")
+    with sample_cols[1]: download_sample_excel("⬇ File mẫu công nợ", "fr01", "sample_fr01_ar", "Cong_no")
     left,right = st.columns(2)
     bank = left.file_uploader("1. Sao kê ngân hàng",["xlsx","xls","csv"],key=upload_key("bank"))
     ar = right.file_uploader("2. Danh sách công nợ phải thu",["xlsx","xls","csv"],key=upload_key("ar"))
@@ -202,6 +222,10 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("Kiểm soát hóa đơn XML & nợ chứng từ")
+    sample_cols = st.columns(2)
+    with sample_cols[0]: download_sample_bytes("⬇ ZIP hóa đơn XML mẫu", sample_xml_zip(), "HoaDon_XML_Mau.zip", "application/zip", "sample_fr02_xml")
+    with sample_cols[1]: download_sample_excel("⬇ Nhật ký thanh toán mẫu", "fr02", "sample_fr02_payments", "Payment_Log")
+    st.caption("MST người mua trong XML mẫu: 0109999999 · Tên người mua: Cong ty khach hang mau. Chữ ký trong file là placeholder, không phải chữ ký số hợp lệ.")
     tax = st.text_input("Mã số thuế doanh nghiệp",key="co_tax")
     company = st.text_input("Tên doanh nghiệp theo đăng ký",key="co_name")
     xml = st.file_uploader("Hóa đơn XML hoặc ZIP chứa nhiều XML",["xml","zip"],key=upload_key("xml"))
@@ -237,6 +261,7 @@ with tabs[2]:
 
 with tabs[3]:
     st.subheader("Nhập một lần – xuất đa đích")
+    download_sample_excel("⬇ File mẫu dữ liệu trung gian", "fr03", "sample_fr03_staging", "Du_lieu_giao_dich")
     source = st.file_uploader("Tải nhật ký thu-chi / dữ liệu đã đối soát",["xlsx","xls","csv"],key=upload_key("staging_file"))
     standard = st.selectbox("Chế độ kế toán tham chiếu",["99","133","200-transition"],
         format_func=lambda x:{"99":"Thông tư 99/2025/TT-BTC (năm tài chính bắt đầu từ 2026)","133":"Thông tư 133/2016/TT-BTC (DN nhỏ và vừa đủ điều kiện)","200-transition":"TT200 – chỉ kỳ tài chính chuyển tiếp phù hợp"}[x])
@@ -297,6 +322,7 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("Quản trị tuổi nợ & tin nhắn nhắc việc")
+    download_sample_excel("⬇ File mẫu công nợ và ngày đến hạn", "fr04", "sample_fr04_aging", "Cong_no")
     f = st.file_uploader("Danh sách công nợ có ngày đến hạn",["xlsx","xls","csv"],key=upload_key("aging_file"))
     if st.button("Tính tuổi nợ",disabled=not f):
         try:
@@ -319,6 +345,10 @@ with tabs[4]:
 
 with tabs[5]:
     st.subheader("Kiểm toán nhanh trước kỳ thuế – Pre-audit")
+    sample_cols = st.columns(3)
+    with sample_cols[0]: download_sample_excel("⬇ Nhật ký chung mẫu", "fr05", "sample_fr05_journal", "Nhat_ky_chung")
+    with sample_cols[1]: download_sample_excel("⬇ Bảng cân đối mẫu", "fr05", "sample_fr05_tb", "Trial_Balance")
+    with sample_cols[2]: download_sample_excel("⬇ Bảng kê VAT mẫu", "fr05", "sample_fr05_vat", "Bang_ke_VAT")
     journal = st.file_uploader("Sổ Nhật ký chung",["xlsx","xls","csv"],key=upload_key("journal"))
     tb = st.file_uploader("Bảng cân đối phát sinh / Trial Balance",["xlsx","xls","csv"],key=upload_key("trial_balance"))
     register = st.file_uploader("Bảng kê hóa đơn mua vào/bán ra",["xlsx","xls","csv"],key=upload_key("register"))
@@ -345,6 +375,11 @@ with tabs[5]:
 
 with tabs[6]:
     st.subheader("Báo cáo quản trị nhanh cho Giám đốc")
+    sample_cols = st.columns(4)
+    with sample_cols[0]: download_sample_excel("⬇ Sao kê mẫu", "fr06", "sample_fr06_cash", "Sao_ke")
+    with sample_cols[1]: download_sample_excel("⬇ Sổ chi tiết mẫu", "fr06", "sample_fr06_gl", "So_chi_tiet")
+    with sample_cols[2]: download_sample_excel("⬇ Phải thu mẫu", "fr06", "sample_fr06_ar", "Phai_thu")
+    with sample_cols[3]: download_sample_excel("⬇ Phải trả mẫu", "fr06", "sample_fr06_ap", "Phai_tra")
     cash_file = st.file_uploader("Sao kê thu-chi ngày/tháng",["xlsx","xls","csv"],key=upload_key("report_cash"))
     opening = st.number_input("Số dư đầu kỳ tiền gửi/quỹ (VNĐ)",min_value=0.0,step=100000.0,key="report_opening")
     if st.button("Tổng hợp dòng tiền",disabled=not cash_file):
@@ -396,6 +431,7 @@ with tabs[6]:
 
 with tabs[7]:
     st.subheader("Cố vấn nghiệp vụ & pháp lý thuế có kiểm chứng")
+    download_sample_bytes("⬇ Tải câu hỏi mẫu", sample_legal_questions(), "Cau_hoi_mau_co_van_thue.txt", "text/plain; charset=utf-8", "sample_fr07_questions")
     st.warning("Chỉ tài liệu có metadata hiệu lực và được người quản trị xác nhận mới được tìm kiếm. Hệ thống không tự xác minh hiệu lực của file tải lên.")
     st.caption("Câu hỏi gửi đến AI (nếu đã cấu hình) chỉ được che một số chuỗi định danh bằng quy tắc tự động. Hãy tự bỏ tên khách hàng, số hợp đồng, địa chỉ và dữ liệu mật trước khi tra cứu.")
     legal_admin_ids = {x.strip() for x in get_setting("LEGAL_ADMIN_USER_IDS","").split(",") if x.strip()}
@@ -469,6 +505,7 @@ with tabs[7]:
 
 with tabs[8]:
     st.subheader("Tài khoản, gói cước & thanh toán VietQR")
+    download_sample_excel("⬇ Tải bảng mẫu gói dịch vụ và MST", "fr08", "sample_fr08_plans")
     st.dataframe(pd.DataFrame([
         {"Gói":"Khách vãng lai","Giá":"0 VNĐ","Quyền lợi":"Xem toàn bộ thống kê · tải tối đa 50 dòng đầu mỗi sheet"},
         {"Gói":"Kế toán Nội bộ","Giá":"69.000 VNĐ/tháng","Quyền lợi":"Không giới hạn dòng · 01 MST"},
