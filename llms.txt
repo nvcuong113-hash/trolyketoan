@@ -1,20 +1,35 @@
 # Trợ lý Kế toán SME
 
 ## Product
-Ứng dụng xử lý tệp cho kế toán SME Việt Nam: sao kê, công nợ, hóa đơn XML, nhật ký thu chi và báo cáo dòng tiền.
+Trợ lý quy trình kế toán cho doanh nghiệp nhỏ tại Việt Nam. Xử lý file sao kê, công nợ, hóa đơn XML, nhật ký kế toán và báo cáo quản trị.
+
+## Architecture
+- Static GEO front door: web/index.html; deploy Cloudflare Pages with output directory web.
+- Streamlit processing application: app.py.
+- Accounting processing core: core.py and accounting_extensions.py.
+- Supabase: account, profile, subscription and payment metadata only. Never stores customer accounting ledgers or uploaded source files.
+- FastAPI billing webhook: billing_api.py.
+- Legal retrieval: legal_rag.py, only from documents explicitly marked current and within effective dates.
 
 ## Modules
-- FR-01: đối soát sao kê và ghép hóa đơn trả gộp.
-- FR-02: đọc XML hóa đơn và kiểm tra cơ bản.
-- FR-03: staging và xuất Excel.
-- FR-04: tuổi nợ và tin nhắn nhắc việc.
-- FR-05: kiểm tra sổ sách sơ bộ.
-- FR-06: báo cáo dòng tiền.
-- FR-07: RAG pháp luật chưa được bật.
-- FR-08: tài khoản/thuê bao/thanh toán thật chưa được bật.
+- FR-01: bank statement reconciliation, exact invoice matching and same-customer subset matching.
+- FR-02: XML invoice parsing and payable-document matching.
+- FR-03: accounting staging, internal management export and template-driven MISA/VACOM workbook mapping.
+- FR-04: receivables aging and reminder drafts.
+- FR-05: preliminary pre-audit checks.
+- FR-06: cash-flow summary, estimated P&L and top receivable/payable counterparties.
+- FR-07: legal RAG with retrieved source excerpts and downloadable evidence checklist.
+- FR-08: Supabase Auth, subscriptions, dynamic VietQR order and SePay webhook activation.
 
-## Data handling
-Tệp kế toán xử lý trong bộ nhớ phiên; không cấu hình database lưu sổ sách. Người dùng phải kiểm tra kết quả.
+## Plans
+- Guest: download up to 50 rows per worksheet.
+- Internal: 69,000 VND/month, one tax code.
+- Accounting service: 249,000 VND/month, multiple tax codes.
 
-## Limitations
-MVP không xác thực chữ ký số XML về mặt mật mã, không tra cứu trạng thái hóa đơn cơ quan thuế, không đảm bảo mẫu import MISA/VACOM, không cung cấp RAG pháp lý đã kiểm chứng, xác thực tài khoản hoặc webhook VietQR.
+## Important limitations
+- Uploaded MISA/VACOM template is required; each MISA voucher type requires its own official template. VACOM end-to-end compatibility is not yet verified.
+- XML digital signatures are not cryptographically verified; tax-authority invoice status is not queried.
+- Legal corpus must be uploaded and independently reviewed by an authorized administrator; no conclusion is returned when no supporting legal excerpt is found.
+- P&L is estimated from account movements and must be reviewed by an accountant.
+- Real payment activation requires Supabase project configuration, bank account and SePay webhook credentials.
+- Uploaded accounting files are processed in session memory and are not written to a ledger database.
