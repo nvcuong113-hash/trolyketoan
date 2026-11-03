@@ -38,7 +38,7 @@
 
 ## E. MISA / VACOM
 - [ ] Tải đúng mẫu import từ phiên bản MISA/VACOM đang dùng.
-- [ ] Dùng mẫu riêng cho Thu tiền gửi và Chi tiền gửi; không nhập trực tiếp sao kê ngân hàng.
+- [ ] Dùng mẫu riêng cho Thu tiền gửi, Chi tiền gửi và Chuyển tiền nội bộ; không nhập trực tiếp sao kê ngân hàng.
 - [ ] Chọn tiền tố và số chứng từ bắt đầu không trùng số đã ghi sổ.
 - [ ] Soát lại ngày hạch toán, ngày chứng từ, số chứng từ, đối tượng, tài khoản, số tiền và mã hóa đơn.
 - [ ] Thử import trên dữ liệu test/đơn vị test trước khi dùng dữ liệu thật.
