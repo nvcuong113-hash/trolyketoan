@@ -500,6 +500,9 @@ with tabs[7]:
     st.markdown("- [Thông tư 99/2025/TT-BTC – hiệu lực từ 01/01/2026](https://vbpl.moj.gov.vn/bocongthuong/Pages/vbpq-van-ban-goc.aspx?ItemID=187356)")
     st.markdown("- [Thông tư 133/2016/TT-BTC – chế độ kế toán doanh nghiệp nhỏ và vừa](https://vanban.chinhphu.vn/default.aspx?docid=186679&hiddenHeaderFooter=1&pageid=27160)")
     st.markdown("- [Nghị định 254/2026/NĐ-CP – hóa đơn điện tử, hiệu lực từ 01/07/2026](https://vanban.chinhphu.vn/?docid=218689&pageid=27160&typegroupid=4)")
+    st.markdown("- [Luật Quản lý thuế 108/2025/QH15 – hiệu lực từ 01/07/2026](https://vanban.chinhphu.vn/?docid=216541&orggroupid=1&pageid=27160)")
+    st.markdown("- [Nghị định 252/2026/NĐ-CP – hướng dẫn Luật Quản lý thuế](https://vanban.chinhphu.vn/?docid=218690&orggroupid=2&pageid=27160)")
+    st.markdown("- [Thông tư 91/2026/TT-BTC – hướng dẫn hóa đơn điện tử](https://vanban.chinhphu.vn/?docid=219006&pageid=27160)")
     st.markdown("- [Luật Thuế TNDN 67/2025/QH15](https://vanban.chinhphu.vn/?classid=1&docid=214607&pageid=27160&typ=)")
     st.markdown("- [Luật 09/2026/QH16 – sửa đổi các luật thuế](https://vanban.chinhphu.vn/?docid=218095&pageid=27160&typegroupid=3)")
 
