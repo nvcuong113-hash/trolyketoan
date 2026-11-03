@@ -15,13 +15,13 @@ from core import find_column, normalize_text, parse_money, similarity, subset_su
 
 def reconcile_payables(invoices: pd.DataFrame, payments: pd.DataFrame, today: date | None = None,
                        epsilon: int = 1000, threshold: float = 0.80) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Match outgoing payments to supplier invoices; unmatched payments are documentary debt."""
+    """Match outgoing payments to supplier invoices, including unambiguous partial payments."""
     today = today or date.today()
     inv = invoices.copy().reset_index(drop=True)
     pay = payments.copy().reset_index(drop=True)
     inv_amount_col = find_column(inv.columns, ["Tổng thanh toán", "Số tiền phải trả", "Số tiền", "Amount"], required=True)
     inv_name_col = find_column(inv.columns, ["Tên người bán", "Nhà cung cấp", "Tên nhà cung cấp", "Đối tác"])
-    inv_tax_col = find_column(inv.columns, ["MST người bán", "Mã số thuế người bán", "MST", "Mã số thuế"])
+    inv_tax_col = find_column(inv.columns, ["MST người bán", "Mã số thuế người bán", "MST", "Tax code"])
     inv_no_col = find_column(inv.columns, ["Số hóa đơn", "Ký hiệu và số hóa đơn", "Invoice number"])
     inv_date_col = find_column(inv.columns, ["Ngày lập", "Ngày hóa đơn", "Issue date"])
     pay_amount_col = find_column(pay.columns, ["Số tiền ghi Nợ", "Tiền ra", "Số tiền chi", "Số tiền", "Amount"], required=True)
@@ -29,51 +29,105 @@ def reconcile_payables(invoices: pd.DataFrame, payments: pd.DataFrame, today: da
     pay_date_col = find_column(pay.columns, ["Ngày giao dịch", "Ngày hạch toán", "Ngày", "Transaction date"])
     pay_tax_col = find_column(pay.columns, ["MST nhà cung cấp", "Mã số thuế", "Tax code"])
     pay_name_col = find_column(pay.columns, ["Tên nhà cung cấp", "Nhà cung cấp", "Đối tác"])
-    inv["_amount"] = inv[inv_amount_col].map(parse_money)
-    inv["_name"] = inv[inv_name_col].fillna("").astype(str) if inv_name_col else ""
-    inv["_tax"] = inv[inv_tax_col].fillna("").astype(str).str.replace(r"\D", "", regex=True) if inv_tax_col else ""
-    inv["_no"] = inv[inv_no_col].fillna("").astype(str) if inv_no_col else ""
-    inv["_date"] = pd.to_datetime(inv[inv_date_col], errors="coerce", dayfirst=True) if inv_date_col else pd.NaT
-    pay["_amount"] = pay[pay_amount_col].map(parse_money)
-    pay["_desc"] = pay[pay_desc_col].fillna("").astype(str) if pay_desc_col else ""
-    pay["_date"] = pd.to_datetime(pay[pay_date_col], errors="coerce", dayfirst=True) if pay_date_col else pd.NaT
-    pay["_tax"] = pay[pay_tax_col].fillna("").astype(str).str.replace(r"\D", "", regex=True) if pay_tax_col else ""
-    pay["_name"] = pay[pay_name_col].fillna("").astype(str) if pay_name_col else ""
-    inv_paid, pay_used = set(), set()
-    for pidx, p in pay.iterrows():
-        if p["_amount"] <= 0:
-            continue
-        candidates = [i for i in range(len(inv)) if i not in inv_paid and inv.at[i, "_amount"] > 0]
-        def partner_match(i):
-            tax_match = bool(p["_tax"] and inv.at[i, "_tax"] and p["_tax"] == inv.at[i, "_tax"])
-            name = p["_name"] or p["_desc"]
-            name_match = bool(inv.at[i, "_name"] and name and
-                              (normalize_text(inv.at[i, "_name"]) in normalize_text(name) or
-                               similarity(inv.at[i, "_name"], name) >= threshold))
-            return tax_match or name_match
-        partner_idxs = [i for i in candidates if partner_match(i)]
-        exact = [i for i in partner_idxs if abs(inv.at[i, "_amount"] - p["_amount"]) <= epsilon]
-        chosen = [exact[0]] if exact else []
-        if not chosen and partner_idxs:
-            subset = subset_sum_indices([inv.at[i, "_amount"] for i in partner_idxs], p["_amount"], epsilon)
-            if subset:
-                chosen = [partner_idxs[j] for j in subset]
-        if chosen:
-            inv_paid.update(chosen)
-            pay_used.add(pidx)
-    inv["Trạng thái chứng từ"] = ["Đủ chứng từ" if i in inv_paid else "Hóa đơn treo" for i in range(len(inv))]
-    inv["Ngày thanh toán tìm thấy"] = ""
-    inv["Cảnh báo"] = ["Đã tìm thấy khoản chi tương ứng" if i in inv_paid else "Có hóa đơn nhưng chưa ghép được khoản chi" for i in range(len(inv))]
-    missing = pay.loc[[i for i in range(len(pay)) if i not in pay_used]].copy()
-    missing["Số ngày từ ngày chi"] = (pd.Timestamp(today) - missing["_date"]).dt.days
-    missing["Trạng thái chứng từ"] = "Thiếu hóa đơn (Nợ chứng từ)"
-    missing["Cảnh báo"] = missing.apply(
-        lambda r: "Không tìm thấy hóa đơn tương ứng" if pd.notna(r["_date"]) else "Không tìm thấy hóa đơn; thiếu ngày giao dịch",
-        axis=1)
-    inv = inv.drop(columns=["_amount", "_name", "_tax", "_no", "_date"], errors="ignore")
-    missing = missing.drop(columns=["_amount", "_desc", "_date", "_tax", "_name"], errors="ignore")
-    return inv, missing
+    inv_amounts = inv[inv_amount_col].map(parse_money).tolist()
+    inv_names = inv[inv_name_col].fillna("").astype(str).tolist() if inv_name_col else [""]*len(inv)
+    inv_taxes = inv[inv_tax_col].fillna("").astype(str).str.replace(r"\D","",regex=True).tolist() if inv_tax_col else [""]*len(inv)
+    inv_numbers = inv[inv_no_col].fillna("").astype(str).tolist() if inv_no_col else [""]*len(inv)
+    inv_dates = pd.to_datetime(inv[inv_date_col],errors="coerce",dayfirst=True).tolist() if inv_date_col else [pd.NaT]*len(inv)
+    pay_amounts = pay[pay_amount_col].map(parse_money).tolist()
+    pay_descs = pay[pay_desc_col].fillna("").astype(str).tolist() if pay_desc_col else [""]*len(pay)
+    pay_dates = pd.to_datetime(pay[pay_date_col],errors="coerce",dayfirst=True).tolist() if pay_date_col else [pd.NaT]*len(pay)
+    pay_taxes = pay[pay_tax_col].fillna("").astype(str).str.replace(r"\D","",regex=True).tolist() if pay_tax_col else [""]*len(pay)
+    pay_names = pay[pay_name_col].fillna("").astype(str).tolist() if pay_name_col else [""]*len(pay)
+    remaining = [max(0.0,x) for x in inv_amounts]
+    paid = [0.0]*len(inv)
+    last_payment = [""]*len(inv)
+    used_payments = set()
+    unallocated = []
 
+    for pidx in range(len(pay)):
+        amount = pay_amounts[pidx]
+        if amount <= 0:
+            continue
+        desc_norm = normalize_text(pay_descs[pidx])
+        desc_digits = re.sub(r"\D","",pay_descs[pidx])
+        def partner_match(i):
+            tax_match = bool(pay_taxes[pidx] and inv_taxes[i] and pay_taxes[pidx] == inv_taxes[i])
+            partner_text = pay_names[pidx] or pay_descs[pidx]
+            norm_partner = normalize_text(partner_text)
+            name_match = bool(inv_names[i] and norm_partner and (
+                normalize_text(inv_names[i]) in norm_partner or
+                similarity(inv_names[i],partner_text) >= threshold
+            ))
+            return tax_match or name_match
+        candidates = [i for i in range(len(inv)) if remaining[i] > epsilon and partner_match(i)]
+        explicit = [i for i in candidates if inv_numbers[i] and normalize_text(inv_numbers[i]) in desc_norm]
+        allocated = 0.0
+        if len(explicit) == 1:
+            i = explicit[0]
+            allocated = min(amount,remaining[i])
+            remaining[i] -= allocated; paid[i] += allocated
+            last_payment[i] = str(pay_dates[pidx]) if pd.notna(pay_dates[pidx]) else ""
+        elif len(explicit) > 1:
+            allocated = 0.0
+        else:
+            exact = [i for i in candidates if abs(remaining[i]-amount) <= epsilon]
+            subset = None
+            if not exact and candidates and len(candidates) <= 80:
+                subset = subset_sum_indices([remaining[i] for i in candidates],amount,epsilon)
+            if len(exact) == 1:
+                chosen = exact
+            elif len(exact) > 1:
+                chosen = []
+            elif subset:
+                chosen = [candidates[j] for j in subset]
+            elif len(candidates) == 1 and amount < remaining[candidates[0]]-epsilon:
+                chosen = candidates
+            else:
+                chosen = []
+            for i in chosen:
+                allocation = min(amount-allocated,remaining[i])
+                if allocation <= 0:
+                    continue
+                remaining[i] -= allocation; paid[i] += allocation; allocated += allocation
+                last_payment[i] = str(pay_dates[pidx]) if pd.notna(pay_dates[pidx]) else ""
+        if allocated <= 0:
+            unallocated.append((pidx,amount,"Không tìm thấy hóa đơn hoặc đối tác đủ căn cứ"))
+        elif amount-allocated > epsilon:
+            unallocated.append((pidx,amount-allocated,"Khoản chi còn dư chưa phân bổ vào hóa đơn"))
+        else:
+            used_payments.add(pidx)
+
+    inv["Số đã thanh toán"] = [round(x,2) for x in paid]
+    inv["Còn phải trả"] = [round(x,2) for x in remaining]
+    inv["Ngày thanh toán gần nhất"] = last_payment
+    inv["Trạng thái chứng từ"] = [
+        "Đủ chứng từ" if remaining[i] <= epsilon else
+        "Thanh toán một phần" if paid[i] > epsilon else
+        "Hóa đơn treo"
+        for i in range(len(inv))
+    ]
+    inv["Cảnh báo"] = [
+        "Đã ghép đủ khoản chi" if remaining[i] <= epsilon else
+        "Đã ghép một phần khoản chi; còn số dư phải trả" if paid[i] > epsilon else
+        "Có hóa đơn nhưng chưa ghép được khoản chi"
+        for i in range(len(inv))
+    ]
+    if unallocated:
+        missing = pay.iloc[[x[0] for x in unallocated]].copy()
+        missing["Số tiền chưa phân bổ"] = [round(x[1],2) for x in unallocated]
+        missing["Số ngày từ ngày chi"] = [
+            (pd.Timestamp(today)-pd.Timestamp(pay_dates[x[0]])).days if pd.notna(pay_dates[x[0]]) else None
+            for x in unallocated
+        ]
+        missing["Trạng thái chứng từ"] = [
+            "Thiếu hóa đơn (Nợ chứng từ)" if x[1] == pay_amounts[x[0]] else "Khoản chi chưa phân bổ hết"
+            for x in unallocated
+        ]
+        missing["Cảnh báo"] = [x[2] for x in unallocated]
+    else:
+        missing = pd.DataFrame(columns=list(pay.columns)+["Số tiền chưa phân bổ","Số ngày từ ngày chi","Trạng thái chứng từ","Cảnh báo"])
+    return inv, missing
 
 def build_executive_pnl(journal: pd.DataFrame, receivables: pd.DataFrame | None = None,
                         payables: pd.DataFrame | None = None) -> dict:
