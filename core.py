@@ -309,8 +309,7 @@ def reconcile_bank(bank: pd.DataFrame, invoices: pd.DataFrame, threshold: float 
         })
     columns = ["Mã giao dịch","Dòng sao kê","Ngày","Số tiền","Nội dung","Kết quả","Hóa đơn","Khách hàng","Số hóa đơn ghép","Căn cứ"]
     result = pd.DataFrame(records,columns=columns)
-    unmatched = inv.loc[~inv.index.isin(matched_invoice_ids)].drop(
-        columns=[amount_col,invoice_col,name_col,code_col,tax_col],errors="ignore")
+    unmatched = inv.loc[~inv.index.isin(matched_invoice_ids)].copy()
     return result, unmatched
 
 def _flatten_xml(root: ET.Element) -> dict[str, list[str]]:
