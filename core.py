@@ -196,7 +196,8 @@ def _customer_candidates(invoices: pd.DataFrame, description: str, threshold: fl
 
 def reconcile_bank(bank: pd.DataFrame, invoices: pd.DataFrame, threshold: float = 0.80,
                    epsilon: int = EPSILON_VND) -> tuple[pd.DataFrame, pd.DataFrame]:
-    b, inv = bank.copy(), invoices.copy()
+    b = bank.copy().reset_index(drop=True)
+    inv = invoices.copy().reset_index(drop=True)
     date_col = find_column(b.columns, ["Ngày giao dịch", "Ngày hạch toán", "Transaction date", "Date"])
     credit_col = find_column(b.columns, ["Số tiền ghi Có", "Ghi Có", "Tiền vào", "Credit", "Amount in"], required=True)
     debit_col = find_column(b.columns, ["Số tiền ghi Nợ", "Ghi Nợ", "Tiền ra", "Debit", "Amount out"])
@@ -215,52 +216,89 @@ def reconcile_bank(bank: pd.DataFrame, invoices: pd.DataFrame, threshold: float 
     inv["_customer_name"] = inv[name_col].fillna("").astype(str) if name_col else ""
     inv["_customer_code"] = inv[code_col].fillna("").astype(str) if code_col else ""
     inv["_tax_code"] = inv[tax_col].fillna("").astype(str) if tax_col else ""
-    inv["_matched"] = False
+
+    # Build inverted indexes once. This avoids scanning the entire invoice register
+    # for every bank line (the former O(bank_rows * invoice_rows) bottleneck).
+    stop_tokens = {"cty","cong","ty","tnhh","cp","jsc","co","company","limited","ltd","the","and"}
+    customer_index: dict[str, set[int]] = {}
+    invoice_index: dict[str, set[int]] = {}
+    for idx, row in inv.iterrows():
+        if row["_amount"] <= 0:
+            continue
+        for field in (row["_customer_name"], row["_customer_code"], row["_tax_code"]):
+            tokens = set(re.findall(r"[a-z0-9]+", normalize_text(field))) - stop_tokens
+            for token in tokens:
+                customer_index.setdefault(token, set()).add(idx)
+        inv_tokens = set(re.findall(r"[a-z0-9]+", normalize_text(row["_invoice"]))) - stop_tokens
+        for token in inv_tokens:
+            invoice_index.setdefault(token, set()).add(idx)
+
+    matched_invoice_ids: set[int] = set()
     records = []
     for source_idx, row in b.iterrows():
         amount = int(round(row["_credit"]))
         if amount <= 0:
             continue
         desc = row["_description"]
-        eligible = inv.loc[(~inv["_matched"]) & (inv["_amount"] > 0)].copy()
-        # Exact invoice number + exact amount gets first priority.
-        exact_hits = eligible[
-            eligible.apply(lambda r: bool(r["_invoice"].strip() and normalize_text(r["_invoice"]) in normalize_text(desc))
-                           and abs(r["_amount"] - amount) <= epsilon, axis=1)
-        ]
-        if len(exact_hits):
-            chosen = [exact_hits.index[0]]
+        desc_norm = normalize_text(desc)
+        desc_tokens = set(re.findall(r"[a-z0-9]+", desc_norm))
+        invoice_candidates = set().union(*(invoice_index.get(token,set()) for token in desc_tokens)) if desc_tokens else set()
+        customer_candidates = set().union(*(customer_index.get(token,set()) for token in desc_tokens)) if desc_tokens else set()
+        invoice_candidates = [i for i in sorted(invoice_candidates) if i not in matched_invoice_ids]
+        customer_idxs = [i for i in sorted(customer_candidates) if i not in matched_invoice_ids and inv.at[i,"_amount"] > 0]
+
+        exact_hits = []
+        for i in invoice_candidates:
+            invoice_norm = normalize_text(inv.at[i,"_invoice"])
+            invoice_tokens = set(re.findall(r"[a-z0-9]+", invoice_norm))
+            invoice_identified = bool(invoice_norm and (invoice_norm in desc_norm or (invoice_tokens and invoice_tokens.issubset(desc_tokens))))
+            if invoice_identified and abs(inv.at[i,"_amount"]-amount) <= epsilon:
+                exact_hits.append(i)
+        if exact_hits:
+            chosen = [exact_hits[0]]
             match_type, reason = "Khớp 1-1", "Mã hóa đơn trong nội dung + số tiền"
         else:
-            customer_idxs = _customer_candidates(eligible, desc, threshold)
-            exact_amount = [i for i in customer_idxs if abs(inv.at[i, "_amount"] - amount) <= epsilon]
+            # Candidate tokens must be present in the transfer description. A name/code
+            # exact match or sufficiently similar name is required before any auto-match.
+            verified = []
+            for i in customer_idxs:
+                name = inv.at[i,"_customer_name"]
+                code = inv.at[i,"_customer_code"]
+                tax = inv.at[i,"_tax_code"]
+                exact_partner = any(
+                    token and normalize_text(token) in desc_norm
+                    for token in (name,code,tax)
+                )
+                shared = bool(set(re.findall(r"[a-z0-9]+",normalize_text(name))) & desc_tokens)
+                fuzzy_partner = bool(name and shared and similarity(name,desc) >= threshold)
+                if exact_partner or shared or fuzzy_partner:
+                    verified.append(i)
+            exact_amount = [i for i in verified if abs(inv.at[i,"_amount"]-amount) <= epsilon]
             if exact_amount:
                 chosen = [exact_amount[0]]
                 match_type, reason = "Khớp 1-1", "Đối tác nhận diện được + số tiền"
             else:
-                pool = customer_idxs
-                # If description doesn't identify the customer, do not combine invoices across customers.
-                subset = subset_sum_indices(inv.loc[pool, "_amount"].tolist(), amount, epsilon) if pool else None
+                pool = verified
+                subset = subset_sum_indices([inv.at[i,"_amount"] for i in pool],amount,epsilon) if pool and len(pool) <= MAX_SUBSET_CANDIDATES else None
                 if subset:
-                    chosen = [pool[i] for i in subset]
+                    chosen = [pool[j] for j in subset]
                     match_type, reason = "Khớp trả gộp (1-N)", "Tổ hợp hóa đơn cùng đối tác; sai số cho phép"
                 else:
                     chosen, match_type, reason = [], "Chưa xác định", "Chưa đủ căn cứ ghép tự động"
-        for idx in chosen:
-            inv.at[idx, "_matched"] = True
+        matched_invoice_ids.update(chosen)
         records.append({
-            "Mã giao dịch": str(uuid.uuid4())[:8], "Dòng sao kê": source_idx + 1,
+            "Mã giao dịch": str(uuid.uuid4())[:8], "Dòng sao kê": source_idx+1,
             "Ngày": row["_date"], "Số tiền": amount, "Nội dung": desc,
             "Kết quả": match_type,
-            "Hóa đơn": ", ".join(inv.loc[chosen, "_invoice"].astype(str).tolist()),
-            "Khách hàng": ", ".join(sorted(set(inv.loc[chosen, "_customer_name"].astype(str).tolist()))),
+            "Hóa đơn": ", ".join(inv.loc[chosen,"_invoice"].astype(str).tolist()),
+            "Khách hàng": ", ".join(sorted(set(inv.loc[chosen,"_customer_name"].astype(str).tolist()))),
             "Số hóa đơn ghép": len(chosen), "Căn cứ": reason
         })
-    columns = ["Mã giao dịch", "Dòng sao kê", "Ngày", "Số tiền", "Nội dung", "Kết quả", "Hóa đơn", "Khách hàng", "Số hóa đơn ghép", "Căn cứ"]
-    result = pd.DataFrame(records, columns=columns)
-    unmatched = inv.loc[~inv["_matched"]].drop(columns=["_amount", "_invoice", "_customer_name", "_customer_code", "_tax_code", "_matched"], errors="ignore")
+    columns = ["Mã giao dịch","Dòng sao kê","Ngày","Số tiền","Nội dung","Kết quả","Hóa đơn","Khách hàng","Số hóa đơn ghép","Căn cứ"]
+    result = pd.DataFrame(records,columns=columns)
+    unmatched = inv.loc[~inv.index.isin(matched_invoice_ids)].drop(
+        columns=["_amount","_invoice","_customer_name","_customer_code","_tax_code"],errors="ignore")
     return result, unmatched
-
 
 def _flatten_xml(root: ET.Element) -> dict[str, list[str]]:
     values: dict[str, list[str]] = {}
