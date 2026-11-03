@@ -256,9 +256,11 @@ def reconcile_bank(bank: pd.DataFrame, invoices: pd.DataFrame, threshold: float 
             invoice_identified = bool(invoice_norm and (invoice_norm in desc_norm or (invoice_tokens and invoice_tokens.issubset(desc_tokens))))
             if invoice_identified and abs(inv.at[i,"_amount"]-amount) <= epsilon:
                 exact_hits.append(i)
-        if exact_hits:
+        if len(exact_hits) == 1:
             chosen = [exact_hits[0]]
             match_type, reason = "Khớp 1-1", "Mã hóa đơn trong nội dung + số tiền"
+        elif len(exact_hits) > 1:
+            chosen, match_type, reason = [], "Chưa xác định", "Trùng mã hóa đơn trong danh sách; cần xử lý thủ công"
         else:
             # Candidate tokens must be present in the transfer description. A name/code
             # exact match or sufficiently similar name is required before any auto-match.
@@ -276,9 +278,11 @@ def reconcile_bank(bank: pd.DataFrame, invoices: pd.DataFrame, threshold: float 
                 if exact_partner or shared or fuzzy_partner:
                     verified.append(i)
             exact_amount = [i for i in verified if abs(inv.at[i,"_amount"]-amount) <= epsilon]
-            if exact_amount:
+            if len(exact_amount) == 1:
                 chosen = [exact_amount[0]]
                 match_type, reason = "Khớp 1-1", "Đối tác nhận diện được + số tiền"
+            elif len(exact_amount) > 1:
+                chosen, match_type, reason = [], "Chưa xác định", "Có nhiều hóa đơn cùng đối tác và số tiền; cần xác nhận số hóa đơn"
             else:
                 pool = verified
                 subset = subset_sum_indices([inv.at[i,"_amount"] for i in pool],amount,epsilon) if pool and len(pool) <= MAX_SUBSET_CANDIDATES else None
