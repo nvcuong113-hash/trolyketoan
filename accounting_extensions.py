@@ -130,11 +130,19 @@ def reconcile_payables(invoices: pd.DataFrame, payments: pd.DataFrame, today: da
     return inv, missing
 
 def build_executive_pnl(journal: pd.DataFrame, receivables: pd.DataFrame | None = None,
-                        payables: pd.DataFrame | None = None) -> dict:
+                        payables: pd.DataFrame | None = None,
+                        start_date: date | None = None, end_date: date | None = None) -> dict:
     debit_col = find_column(journal.columns, ["Tài khoản Nợ", "TK Nợ", "Debit account"], required=True)
     credit_col = find_column(journal.columns, ["Tài khoản Có", "TK Có", "Credit account"], required=True)
     amount_col = find_column(journal.columns, ["Số tiền", "Phát sinh", "Số phát sinh", "Amount"], required=True)
     work = journal.copy()
+    if start_date or end_date:
+        date_col = find_column(work.columns, ["Ngày hạch toán", "Ngày chứng từ", "Ngày", "Date"], required=True)
+        work["_pnl_date"] = pd.to_datetime(work[date_col], errors="coerce", dayfirst=True)
+        if start_date:
+            work = work[work["_pnl_date"].dt.date >= start_date]
+        if end_date:
+            work = work[work["_pnl_date"].dt.date <= end_date]
     work["_debit"] = work[debit_col].fillna("").astype(str).str.strip()
     work["_credit"] = work[credit_col].fillna("").astype(str).str.strip()
     work["_amount"] = work[amount_col].map(parse_money)
