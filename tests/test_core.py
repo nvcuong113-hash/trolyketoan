@@ -14,7 +14,7 @@ def test_subset_sum():
     chosen = subset_sum_indices([100,200,300,400],500,epsilon=0)
     assert chosen is not None and len(chosen) == 2
     assert sum([100,200,300,400][i] for i in chosen) == 500
-    assert subset_sum_indices([100,200],900) is None
+    assert subset_sum_indices([100,200],900,epsilon=0) is None
 
 def test_mask_sensitive_labeled_tax_and_phone():
     masked=mask_sensitive("SDT 0912345678, MST 0123456789, STK 123456789012")
