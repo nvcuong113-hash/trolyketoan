@@ -77,6 +77,8 @@ declare
   v_expiry timestamptz := now() + interval '30 minutes';
 begin
   if v_user is null then raise exception 'Authentication required'; end if;
+  update public.payments set status='expired'
+    where user_id=v_user and status='pending' and expires_at<=now();
   if p_plan = 'internal' then v_amount := 69000;
   elsif p_plan = 'service' then v_amount := 249000;
   else raise exception 'Invalid plan'; end if;
@@ -119,7 +121,11 @@ begin
   end if;
   update public.payments set status='paid', transaction_id=p_transaction_id,
     paid_at=now(), provider_payload=p_payload where id=v_payment.id;
-  v_expiry := now() + interval '30 days';
+  select greatest(now(),coalesce(max(expires_at),now())) + interval '30 days'
+    into v_expiry from public.subscriptions
+    where user_id=v_payment.user_id and status='active' and expires_at>now();
+  update public.subscriptions set status='expired'
+    where user_id=v_payment.user_id and status='active' and expires_at<=now();
   insert into public.subscriptions(user_id,plan,status,started_at,expires_at)
   values(v_payment.user_id,v_payment.plan,'active',now(),v_expiry);
   return jsonb_build_object('status','paid','user_id',v_payment.user_id,'plan',v_payment.plan,'expires_at',v_expiry);
