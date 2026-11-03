@@ -17,6 +17,7 @@ from auth_service import get_public_client, get_admin_client, restore_session, s
 from legal_rag import build_legal_index, retrieve_legal_context, answer_with_openai, make_checklist_xlsx
 from legal_storage import publish_legal_document, load_published_legal_documents
 from sample_data import sample_workbook, sample_xml_zip, sample_legal_questions
+from reports import management_report_pdf
 
 st.set_page_config(page_title="Trợ lý Kế toán SME", page_icon="🧾", layout="wide")
 TTL_SECONDS = 600
@@ -397,6 +398,13 @@ with tabs[6]:
         message = (f"📊 BÁO CÁO DÒNG TIỀN\n💰 Tồn đầu kỳ: {summary['Tồn đầu kỳ']:,.0f} VNĐ\n📥 Tổng thu: {summary['Tổng thu']:,.0f} VNĐ\n📤 Tổng chi: {summary['Tổng chi']:,.0f} VNĐ\n📈 Dòng tiền thuần: {summary['Dòng tiền thuần']:,.0f} VNĐ\n🏦 Tồn cuối kỳ: {summary['Tồn cuối kỳ']:,.0f} VNĐ")
         st.text_area("Nội dung gửi Zalo cho Giám đốc",message,height=170)
         export("⬇ Tải báo cáo dòng tiền",{"Tong_hop":pd.DataFrame([summary])},"Bao_cao_dong_tien.xlsx","cashflow_export")
+        try:
+            pdf_pnl = st.session_state.get("data_pnl")
+            pdf_data = management_report_pdf(summary,pdf_pnl)
+            download_sample_bytes("⬇ Tải Dashboard quản trị 1 trang (PDF)",pdf_data,
+                "Dashboard_Quan_Tri_Dong_Tien.pdf","application/pdf","cashflow_pdf_export")
+        except Exception as exc:
+            st.warning(f"Chưa tạo được PDF dashboard: {exc}")
     st.divider()
     st.markdown("**Báo cáo lãi lỗ tháng (P&L ước tính)**")
     gl = st.file_uploader("Sổ chi tiết / Nhật ký chung có ngày, tài khoản Nợ, Có và số tiền",["xlsx","xls","csv"],key=upload_key("pnl_gl"))
