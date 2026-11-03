@@ -22,7 +22,13 @@ def parse_sepay_event(payload: dict[str, Any]) -> dict[str, Any]:
         amount = int(payload["transferAmount"])
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("Webhook thiếu mã giao dịch hoặc số tiền hợp lệ") from exc
-    memo = str(payload.get("content") or payload.get("description") or "")
+    # SePay exposes a dedicated "code" field as well as content/description.
+    # Include all three so a payment code is still found if the bank omits it from content.
+    memo = " ".join(dict.fromkeys(
+        str(payload.get(key) or "").strip()
+        for key in ("code", "content", "description")
+        if str(payload.get(key) or "").strip()
+    ))
     direction = str(payload.get("transferType") or "").lower()
     if direction != "in":
         raise ValueError("Chỉ xử lý giao dịch tiền vào")
