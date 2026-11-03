@@ -26,3 +26,21 @@ def test_legal_corpus_accepts_only_official_https_domains():
     assert trusted_official_url("https://vbpl.moj.gov.vn/doc")
     assert not trusted_official_url("http://vanban.chinhphu.vn/doc")
     assert not trusted_official_url("https://example.com/law")
+
+
+def test_legal_storage_rejects_invalid_effective_date_order():
+    from legal_storage import publish_legal_document
+    class NeverUpload:
+        class Storage:
+            def from_(self, bucket):
+                raise AssertionError("Should validate metadata before upload")
+        storage=Storage()
+    try:
+        publish_legal_document(NeverUpload(),"law.txt",b"law",{
+            "number":"TT-TEST","title":"Test","effective_from":"2026-05-01",
+            "effective_to":"2026-04-30","status":"Chưa xác minh",
+            "source_url":"https://vanban.chinhphu.vn/test"
+        },"00000000-0000-0000-0000-000000000000")
+        assert False
+    except ValueError as exc:
+        assert "không được trước" in str(exc)
