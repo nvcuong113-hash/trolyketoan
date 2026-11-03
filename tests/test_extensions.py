@@ -131,3 +131,23 @@ def test_pre_audit_cash_threshold_is_configurable():
     threshold=pre_audit(journal,cash_payment_threshold=5000000)
     assert not (no_threshold["Nhóm kiểm tra"]=="Rà soát thanh toán không dùng tiền mặt").any()
     assert (threshold["Nhóm kiểm tra"]=="Rà soát thanh toán không dùng tiền mặt").any()
+
+
+def test_template_mapping_internal_transfer_accounts_and_amount():
+    wb=Workbook()
+    ws=wb.active
+    ws.title="ChuyenTien"
+    ws.append(["Ngày hạch toán","Ngày chứng từ","Số chứng từ","Tài khoản đi","Tài khoản đến","Số tiền"])
+    b=io.BytesIO(); wb.save(b)
+    staging=pd.DataFrame([{
+        "Ngày":pd.Timestamp("2026-11-03"),"Loại chứng từ":"Chuyển tiền nội bộ",
+        "Số tiền giao dịch":2500000,"Tiền thu":0,"Tiền chi":2500000,
+        "Tài khoản đi":"1121","Tài khoản đến":"1122","Chưa đủ chứng từ":False,
+    }])
+    data,missing=map_staging_to_template(staging,b.getvalue(),"chuyen_tien_noi_bo","CTNB",5)
+    from openpyxl import load_workbook
+    out=load_workbook(io.BytesIO(data),data_only=True)
+    row=[out["ChuyenTien"].cell(2,i).value for i in range(1,7)]
+    assert row[2]=="CTNB000005"
+    assert row[3]=="1121" and row[4]=="1122" and row[5]==2500000
+    assert "Số tiền" not in missing
