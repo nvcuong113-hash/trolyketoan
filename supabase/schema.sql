@@ -139,7 +139,7 @@ grant execute on function public.create_payment_order(text) to authenticated;
 
 create or replace function public.set_subscription_tax_codes(p_tax_codes text[])
 returns jsonb language plpgsql security definer set search_path = public
-as $
+as $$
 declare
   v_user uuid := auth.uid();
   v_subscription public.subscriptions%rowtype;
@@ -161,7 +161,7 @@ begin
   update public.subscriptions set tax_codes=v_codes where id=v_subscription.id;
   return jsonb_build_object('updated',true,'tax_code_count',cardinality(v_codes));
 end;
-$;
+$$;
 
 revoke all on function public.set_subscription_tax_codes(text[]) from public, anon;
 grant execute on function public.set_subscription_tax_codes(text[]) to authenticated;
