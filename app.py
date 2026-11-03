@@ -204,9 +204,12 @@ with tabs[3]:
         st.caption("MISA yêu cầu từng loại chứng từ dùng một file mẫu riêng. Tải mẫu đúng loại chứng từ trong phần mềm, sau đó đưa vào đây để giữ nguyên tên cột và định dạng.")
         target = st.selectbox("Loại chứng từ",["thu_tien_gui","chi_tien_gui"],format_func=lambda x:"Thu tiền gửi" if x=="thu_tien_gui" else "Chi tiền gửi")
         template = st.file_uploader("Tải mẫu Excel import từ MISA/VACOM",["xlsx"],key="accounting_template")
-        if st.button("Ánh xạ dữ liệu vào file mẫu",disabled=not template):
+        default_prefix = "PTG" if target=="thu_tien_gui" else "PCG"
+        voucher_prefix = st.text_input("Tiền tố số chứng từ",value=default_prefix)
+        voucher_start = st.number_input("Số thứ tự chứng từ bắt đầu (kiểm tra để tránh trùng)",min_value=1,value=1,step=1)
+        if st.button("Ánh xạ dữ liệu vào file mẫu",disabled=not(template and voucher_prefix.strip())):
             try:
-                mapped,missing_fields = map_staging_to_template(edited,template.getvalue(),target)
+                mapped,missing_fields = map_staging_to_template(edited,template.getvalue(),target,voucher_prefix,int(voucher_start))
                 st.session_state["result_mapped_template"] = mapped
                 st.session_state["result_template_missing"] = missing_fields
                 st.success("Đã tạo file trên cấu trúc mẫu được tải lên.")
