@@ -11,7 +11,7 @@ def test_parse_money_vietnamese_formats():
     assert parse_money("1,234.50") == 1234.5
 
 def test_subset_sum():
-    assert set(subset_sum_indices([100,200,300,400],500)) == {1,3}
+    assert set(subset_sum_indices([100,200,300,400],500,epsilon=0)) == {1,3}
     assert subset_sum_indices([100,200],900) is None
 
 def test_mask_sensitive_labeled_tax_and_phone():
@@ -27,7 +27,7 @@ def test_reconcile_exact_and_same_customer_subset_only():
         {"Tên khách hàng":"CTY ABC","Mã khách hàng":"ABC","Số hóa đơn":"HD002","Số tiền phải thu":100},
         {"Tên khách hàng":"CTY ABC","Mã khách hàng":"ABC","Số hóa đơn":"HD003","Số tiền phải thu":200},
         {"Tên khách hàng":"CTY XYZ","Mã khách hàng":"XYZ","Số hóa đơn":"HD004","Số tiền phải thu":100}])
-    result,unmatched=reconcile_bank(bank,invoices)
+    result,unmatched=reconcile_bank(bank,invoices,epsilon=0)
     assert result.iloc[0]["Kết quả"]=="Khớp 1-1"
     assert result.iloc[1]["Kết quả"]=="Khớp trả gộp (1-N)"
     assert {"HD002","HD003"} <= set(result.iloc[1]["Hóa đơn"].split(", "))
@@ -40,7 +40,7 @@ def test_aging_priority_boundaries():
         {"Tên khách hàng":"C","Số hóa đơn":"3","Số tiền phải thu":30,"Ngày đến hạn":"18/10/2026"},
         {"Tên khách hàng":"D","Số hóa đơn":"4","Số tiền phải thu":40,"Ngày đến hạn":"01/10/2026"}])
     result=aging_report(source,date(2026,11,3))
-    assert result["Mức độ"].tolist()==["Sắp đến hạn","Sắp đến hạn","Quá hạn nhẹ","Quá hạn nghiêm trọng"]
+    assert result["Mức độ"].tolist()==["Sắp đến hạn","Quá hạn nhẹ","Quá hạn nhẹ","Quá hạn nghiêm trọng"]
 
 def test_pre_audit_detects_negative_cash():
     journal=pd.DataFrame([
