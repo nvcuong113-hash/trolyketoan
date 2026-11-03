@@ -35,6 +35,15 @@ def publish_legal_document(client, filename: str, content: bytes, metadata: dict
         raise ValueError("Nguồn phải là HTTPS thuộc cổng văn bản/cơ quan nhà nước được cho phép.")
     if metadata.get("status") not in {"Còn hiệu lực","Hết hiệu lực","Chưa xác minh"}:
         raise ValueError("Trạng thái văn bản không hợp lệ.")
+    if not str(metadata.get("number") or "").strip() or not str(metadata.get("title") or "").strip():
+        raise ValueError("Thiếu số hiệu hoặc tên văn bản.")
+    try:
+        effective_from = date.fromisoformat(str(metadata["effective_from"]))
+        effective_to = date.fromisoformat(str(metadata["effective_to"])) if metadata.get("effective_to") else None
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Ngày hiệu lực phải theo định dạng YYYY-MM-DD.") from exc
+    if effective_to and effective_to < effective_from:
+        raise ValueError("Ngày hết hiệu lực không được trước ngày bắt đầu hiệu lực.")
     digest=hashlib.sha256(content).hexdigest()
     number=re.sub(r"[^A-Za-z0-9.-]+","_",metadata["number"]).strip("_")[:80]
     effective=re.sub(r"[^0-9-]","",metadata["effective_from"])
