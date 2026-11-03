@@ -128,4 +128,34 @@ $$;
 
 revoke all on function public.apply_sepay_payment(bigint,text,bigint,jsonb) from public, anon, authenticated;
 grant execute on function public.apply_sepay_payment(bigint,text,bigint,jsonb) to service_role;
+revoke all on function public.create_payment_order(text) from public, anon;
 grant execute on function public.create_payment_order(text) to authenticated;
+
+create or replace function public.set_subscription_tax_codes(p_tax_codes text[])
+returns jsonb language plpgsql security definer set search_path = public
+as $
+declare
+  v_user uuid := auth.uid();
+  v_subscription public.subscriptions%rowtype;
+  v_codes text[];
+begin
+  if v_user is null then raise exception 'Authentication required'; end if;
+  select * into v_subscription from public.subscriptions
+    where user_id=v_user and status='active' and expires_at>now()
+    order by expires_at desc limit 1 for update;
+  if not found then raise exception 'No active subscription'; end if;
+  select array_agg(distinct regexp_replace(trim(x), '\\s+', '', 'g'))
+    into v_codes from unnest(coalesce(p_tax_codes, '{}'::text[])) x
+    where trim(x) <> '';
+  v_codes := coalesce(v_codes, '{}'::text[]);
+  if v_subscription.plan='internal' and cardinality(v_codes)>1 then
+    raise exception 'Internal plan supports one tax code';
+  end if;
+  if cardinality(v_codes)>100 then raise exception 'Too many tax codes'; end if;
+  update public.subscriptions set tax_codes=v_codes where id=v_subscription.id;
+  return jsonb_build_object('updated',true,'tax_code_count',cardinality(v_codes));
+end;
+$;
+
+revoke all on function public.set_subscription_tax_codes(text[]) from public, anon;
+grant execute on function public.set_subscription_tax_codes(text[]) to authenticated;
