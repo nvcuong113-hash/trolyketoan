@@ -44,7 +44,9 @@
 - [ ] Thử import trên dữ liệu test/đơn vị test trước khi dùng dữ liệu thật.
 
 ## F. Nghiệm thu trước production
-- [ ] Chạy GitHub Actions; yêu cầu compile và toàn bộ pytest đều PASS.
+- [ ] Chạy GitHub Actions; yêu cầu compile, PostgreSQL schema parser và toàn bộ pytest đều PASS.
+- [ ] Tải và chạy bộ file mẫu ở từng phân hệ trước khi dùng dữ liệu thật.
+- [ ] Kiểm tra file XML mẫu được đánh dấu placeholder, không dùng để nghiệm thu chữ ký số.
 - [ ] Benchmark 5.000 giao dịch với mẫu sao kê thực tế của từng ngân hàng.
 - [ ] Kiểm thử đối soát 1-1, trả gộp, trùng hóa đơn, thanh toán một phần và giao dịch chưa xác định.
 - [ ] Kiểm thử XML có chữ ký, thiếu chữ ký, sai MST và XML không hợp lệ.
