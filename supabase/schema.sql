@@ -184,3 +184,34 @@ create index if not exists webhook_events_status_created_idx on public.webhook_e
 alter table public.webhook_events enable row level security;
 revoke all on public.webhook_events from public, anon, authenticated;
 grant all on public.webhook_events to service_role;
+
+
+-- Public legal texts are reference corpus, not customer accounting data.
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
+values(
+  'legal-corpus','legal-corpus',false,20971520,
+  array['application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','text/plain','text/markdown']
+)
+on conflict(id) do update set public=false,file_size_limit=20971520,
+  allowed_mime_types=excluded.allowed_mime_types;
+
+create table if not exists public.legal_documents (
+  id uuid primary key default gen_random_uuid(),
+  number text not null,
+  title text not null,
+  article text not null default '',
+  effective_from date not null,
+  effective_to date,
+  status text not null check(status in ('Còn hiệu lực','Hết hiệu lực','Chưa xác minh')),
+  source_url text not null,
+  storage_path text not null unique,
+  filename text not null,
+  content_hash text not null unique,
+  uploaded_by uuid references auth.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists legal_documents_effective_idx on public.legal_documents(status,effective_from,effective_to);
+alter table public.legal_documents enable row level security;
+revoke all on public.legal_documents from public,anon,authenticated;
+grant all on public.legal_documents to service_role;
