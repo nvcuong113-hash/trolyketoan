@@ -359,6 +359,12 @@ def parse_invoice_xml(xml_bytes: bytes, company_tax: str = "", company_name: str
         errors.append("Không tìm thấy tên người mua")
     if not signature:
         errors.append("Không phát hiện cấu trúc chữ ký số trong XML")
+    signature_text = " ".join(
+        (e.text or "").strip() for e in root.iter()
+        if any(token in e.tag.split("}")[-1].lower() for token in ("dsign","signature"))
+    )
+    if "DEMO_SIGNATURE_PLACEHOLDER" in signature_text or "NOT_A_REAL_SIGNATURE" in signature_text:
+        errors.append("Chữ ký trong tệp là dữ liệu mẫu, không phải chữ ký số thật")
     return {
         "Tên người bán": seller_name, "MST người bán": re.sub(r"\D", "", seller_tax),
         "Tên người mua": buyer_name, "MST người mua": actual_tax,
