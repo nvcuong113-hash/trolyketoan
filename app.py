@@ -375,6 +375,7 @@ with tabs[7]:
             export_bytes("⬇ Tải Phiếu Checklist Chứng từ / Căn cứ pháp lý",checklist,"Phieu_Checklist_Chung_Tu.xlsx","legal_checklist")
     st.markdown("**Danh mục văn bản tham chiếu đã rà soát sơ bộ**")
     st.markdown("- [Thông tư 99/2025/TT-BTC – hiệu lực từ 01/01/2026](https://vbpl.moj.gov.vn/bocongthuong/Pages/vbpq-van-ban-goc.aspx?ItemID=187356)")
+    st.markdown("- [Thông tư 133/2016/TT-BTC – chế độ kế toán doanh nghiệp nhỏ và vừa](https://vanban.chinhphu.vn/default.aspx?docid=186679&hiddenHeaderFooter=1&pageid=27160)")
     st.markdown("- [Nghị định 254/2026/NĐ-CP – hóa đơn điện tử, hiệu lực từ 01/07/2026](https://vanban.chinhphu.vn/?docid=218689&pageid=27160&typegroupid=4)")
     st.markdown("- [Luật Thuế TNDN 67/2025/QH15](https://vanban.chinhphu.vn/?classid=1&docid=214607&pageid=27160&typ=)")
     st.markdown("- [Luật 09/2026/QH16 – sửa đổi các luật thuế](https://vanban.chinhphu.vn/?docid=218095&pageid=27160&typegroupid=3)")
