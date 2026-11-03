@@ -196,10 +196,17 @@ def advanced_pre_audit(journal: pd.DataFrame, trial_balance: pd.DataFrame | None
 
 
 def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
-                            transaction_type: str = "thu_tien_gui") -> tuple[bytes, list[str]]:
+                            transaction_type: str = "thu_tien_gui",
+                            voucher_prefix: str | None = None,
+                            voucher_start: int = 1) -> tuple[bytes, list[str]]:
     """Fill an uploaded MISA/VACOM template while retaining its worksheets and formatting."""
     if transaction_type not in {"thu_tien_gui", "chi_tien_gui"}:
         raise ValueError("Loại chứng từ phải là thu_tien_gui hoặc chi_tien_gui. Mỗi loại dùng một mẫu riêng.")
+    if voucher_start < 1:
+        raise ValueError("Số chứng từ bắt đầu phải lớn hơn 0.")
+    voucher_prefix = (voucher_prefix or ("PTG" if transaction_type == "thu_tien_gui" else "PCG")).strip()
+    if not voucher_prefix or len(voucher_prefix) > 12:
+        raise ValueError("Tiền tố số chứng từ không hợp lệ.")
     wb = load_workbook(io.BytesIO(template_bytes))
     aliases = {
         "ngay hach toan": ("Ngày hạch toán", "Ngày HT", "Ngày", "Ngày giao dịch", "Accounting date"),
@@ -267,7 +274,7 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
                 if source_cell and source_cell.has_style:
                     cell._style = copy(source_cell._style)
             if key == "so chung tu":
-                cell.value = f"{'PTG' if transaction_type == 'thu_tien_gui' else 'PCG'}{out_idx-header_row:06d}"
+                cell.value = f"{voucher_prefix}{voucher_start + out_idx-header_row-1:06d}"
             elif key in source_cols:
                 cell.value = source[source_cols[key]]
             elif key in {"ngay hach toan", "ngay chung tu"}:
