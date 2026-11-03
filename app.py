@@ -101,7 +101,7 @@ with tabs[0]:
     }
     export("⬇ Tải bộ file mẫu dùng thử",sample,"Bo_file_mau_TroLyKeToan.xlsx","demo")
     st.markdown("**Tài liệu tham khảo:**")
-    st.markdown("- [Hướng dẫn nhập khẩu Excel MISA SME 2026](https://helpsme.misa.vn/2026/kb/lam-the-nao-de-nhap-khau-cac-danh-muc-so-du-chung-tu-tu-file-excel-vao-phan-mem/)")
+    st.markdown("- [Hướng dẫn nhập khẩu Excel MISA SME 2026](https://helpsme.misa.vn/2026/kb/mot-so-cau-hoi-thuong-gap-lien-quan-den-ngan-hang-va-bao-cao-ngan-hang/)")
     st.markdown("- [Cơ sở dữ liệu quốc gia về văn bản pháp luật](https://vbpl.moj.gov.vn/)")
 
 with tabs[1]:
