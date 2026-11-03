@@ -237,13 +237,14 @@ with tabs[5]:
     tb = st.file_uploader("Bảng cân đối phát sinh / Trial Balance",["xlsx","xls","csv"],key="trial_balance")
     register = st.file_uploader("Bảng kê hóa đơn mua vào/bán ra",["xlsx","xls","csv"],key="register")
     opening = st.number_input("Số dư đầu kỳ TK 1111 (VNĐ)",min_value=0.0,step=100000.0)
+    cash_threshold = st.number_input("Ngưỡng rà soát thanh toán tiền mặt (VNĐ; 0 = không chạy)",min_value=0,value=0,step=1000000)
     period_end = st.date_input("Ngày kết thúc kỳ kiểm tra",value=date.today())
     if st.button("🩺 Chạy 6 nhóm kiểm tra",type="primary",disabled=not journal):
         try:
             j = read_upload(journal,["Ngày hạch toán","Tài khoản Nợ","Tài khoản Có","Số tiền"])
             tb_df = read_upload(tb,["Tài khoản","Tổng phát sinh Nợ","Tổng phát sinh Có"]) if tb else None
             reg = read_upload(register,["Tiền thuế","Thuế GTGT"]) if register else None
-            st.session_state["data_audit"] = advanced_pre_audit(j,tb_df,reg,opening,period_end)
+            st.session_state["data_audit"] = advanced_pre_audit(j,tb_df,reg,opening,period_end,int(cash_threshold) if cash_threshold else None)
         except Exception as exc:
             st.error(str(exc))
     audit = st.session_state.get("data_audit")
@@ -377,6 +378,16 @@ with tabs[8]:
         st.write(f"Tài khoản: **{current_user.email or current_user.id}**")
         if subscription:
             st.success(f"Gói đang hoạt động: {PLAN_LABELS.get(subscription['plan'],subscription['plan'])} · Hết hạn: {subscription['expires_at']}")
+            current_codes = subscription.get("tax_codes") or []
+            code_text = st.text_input("Mã số thuế được quản lý (phân tách bằng dấu phẩy)",value=", ".join(current_codes))
+            if st.button("Lưu danh sách mã số thuế"):
+                try:
+                    codes = [x.strip() for x in code_text.split(",") if x.strip()]
+                    updated = client.rpc("set_subscription_tax_codes",{"p_tax_codes":codes}).execute()
+                    st.success("Đã cập nhật danh sách mã số thuế.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Không cập nhật được mã số thuế: {exc}")
         else:
             st.info("Chưa có thuê bao trả phí đang hoạt động.")
         if st.button("Đăng xuất"):
