@@ -200,17 +200,17 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
         raise ValueError("Loại chứng từ phải là thu_tien_gui hoặc chi_tien_gui. Mỗi loại dùng một mẫu riêng.")
     wb = load_workbook(io.BytesIO(template_bytes))
     aliases = {
-        "ngay hach toan": ("Ngày hạch toán", "Ngày", "Ngày giao dịch"),
-        "ngay chung tu": ("Ngày chứng từ", "Ngày", "Ngày giao dịch"),
-        "so chung tu": ("Số chứng từ", "Mã chứng từ"),
-        "ma doi tuong": ("Mã đối tượng", "Mã khách hàng", "Mã nhà cung cấp"),
+        "ngay hach toan": ("Ngày hạch toán", "Ngày HT", "Ngày", "Ngày giao dịch", "Accounting date"),
+        "ngay chung tu": ("Ngày chứng từ", "Ngày CT", "Ngày", "Ngày giao dịch", "Voucher date"),
+        "so chung tu": ("Số chứng từ", "Mã chứng từ", "Số phiếu", "Voucher number"),
+        "ma doi tuong": ("Mã đối tượng", "Mã khách hàng", "Mã nhà cung cấp", "Mã đối tượng THCP"),
         "ten doi tuong": ("Tên đối tượng", "Đối tác", "Tên khách hàng", "Nhà cung cấp"),
-        "dien giai": ("Diễn giải", "Diễn giải chuẩn", "Diễn giải gốc", "Nội dung"),
-        "tai khoan no": ("Tài khoản Nợ", "TK Nợ"),
-        "tai khoan co": ("Tài khoản Có", "TK Có"),
-        "so tien": ("Số tiền", "Tiền thu", "Tiền chi"),
-        "ma hoa don": ("Số hóa đơn", "Mã hóa đơn"),
-        "ma so thue": ("Mã số thuế", "MST"),
+        "dien giai": ("Diễn giải", "Diễn giải chuẩn", "Diễn giải gốc", "Nội dung", "Description"),
+        "tai khoan no": ("Tài khoản Nợ", "TK Nợ", "Tài khoản hạch toán Nợ"),
+        "tai khoan co": ("Tài khoản Có", "TK Có", "Tài khoản hạch toán Có"),
+        "so tien": ("Số tiền", "Tiền thu", "Tiền chi", "Số tiền quy đổi"),
+        "ma hoa don": ("Số hóa đơn", "Mã hóa đơn", "Invoice number"),
+        "ma so thue": ("Mã số thuế", "MST", "Tax code"),
     }
     source_aliases = {
         "ngay hach toan": ("Ngày",), "ngay chung tu": ("Ngày",),
@@ -224,12 +224,19 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
     chosen_sheet, header_row, mapping, best_score = None, None, None, -1
     for ws in wb.worksheets:
         for row_idx in range(1, min(ws.max_row, 40)+1):
-            headers = {normalize_text(cell.value): cell.column for cell in ws[row_idx] if cell.value is not None}
-            score = sum(1 for key in aliases if key in headers)
+            raw_headers = {normalize_text(cell.value): cell.column for cell in ws[row_idx] if cell.value is not None}
+            canonical = {}
+            for key, names in aliases.items():
+                for name in names:
+                    norm = normalize_text(name)
+                    if norm in raw_headers:
+                        canonical[key] = raw_headers[norm]
+                        break
+            score = len(canonical)
             if score > best_score:
-                chosen_sheet, header_row, mapping, best_score = ws, row_idx, headers, score
+                chosen_sheet, header_row, mapping, best_score = ws, row_idx, canonical, score
     if chosen_sheet is None or not mapping or sum(1 for k in required if k in mapping) < len(required):
-        raise ValueError("Không nhận diện được mẫu Excel. Hãy tải đúng mẫu nhập khẩu cho loại chứng từ đã chọn từ phần mềm kế toán.")
+        raise ValueError("Không nhận diện được mẫu Excel hoặc thiếu các cột bắt buộc. Hãy tải đúng mẫu nhập khẩu cho loại chứng từ đã chọn từ phần mềm kế toán.")
     missing_headers = [k for k in required if k not in mapping]
     if missing_headers:
         raise ValueError("Mẫu thiếu cột bắt buộc: " + ", ".join(missing_headers))
