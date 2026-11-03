@@ -398,13 +398,6 @@ with tabs[6]:
         message = (f"📊 BÁO CÁO DÒNG TIỀN\n💰 Tồn đầu kỳ: {summary['Tồn đầu kỳ']:,.0f} VNĐ\n📥 Tổng thu: {summary['Tổng thu']:,.0f} VNĐ\n📤 Tổng chi: {summary['Tổng chi']:,.0f} VNĐ\n📈 Dòng tiền thuần: {summary['Dòng tiền thuần']:,.0f} VNĐ\n🏦 Tồn cuối kỳ: {summary['Tồn cuối kỳ']:,.0f} VNĐ")
         st.text_area("Nội dung gửi Zalo cho Giám đốc",message,height=170)
         export("⬇ Tải báo cáo dòng tiền",{"Tong_hop":pd.DataFrame([summary])},"Bao_cao_dong_tien.xlsx","cashflow_export")
-        try:
-            pdf_pnl = st.session_state.get("data_pnl")
-            pdf_data = management_report_pdf(summary,pdf_pnl)
-            download_sample_bytes("⬇ Tải Dashboard quản trị 1 trang (PDF)",pdf_data,
-                "Dashboard_Quan_Tri_Dong_Tien.pdf","application/pdf","cashflow_pdf_export")
-        except Exception as exc:
-            st.warning(f"Chưa tạo được PDF dashboard: {exc}")
     st.divider()
     st.markdown("**Báo cáo lãi lỗ tháng (P&L ước tính)**")
     gl = st.file_uploader("Sổ chi tiết / Nhật ký chung có ngày, tài khoản Nợ, Có và số tiền",["xlsx","xls","csv"],key=upload_key("pnl_gl"))
@@ -436,6 +429,14 @@ with tabs[6]:
             st.dataframe(pd.DataFrame(pnl["Top 5 phải trả"]),use_container_width=True,hide_index=True)
         st.caption(pnl["Ghi chú"])
         export("⬇ Tải báo cáo P&L",{"P&L":pd.DataFrame([{"Chỉ tiêu":k,"Giá trị":v} for k,v in pnl.items() if isinstance(v,(int,float))]),"Top_phai_thu":pd.DataFrame(pnl["Top 5 phải thu"]),"Top_phai_tra":pd.DataFrame(pnl["Top 5 phải trả"])},"Bao_cao_PnL_Quan_Tri.xlsx","pnl_export")
+
+        if summary:
+            try:
+                pdf_data = management_report_pdf(summary,pnl)
+                download_sample_bytes("⬇ Tải Dashboard quản trị 1 trang (PDF)",pdf_data,
+                    "Dashboard_Quan_Tri_Dong_Tien.pdf","application/pdf","cashflow_pdf_export")
+            except Exception as exc:
+                st.warning(f"Chưa tạo được PDF dashboard: {exc}")
 
 with tabs[7]:
     st.subheader("Cố vấn nghiệp vụ & pháp lý thuế có kiểm chứng")
