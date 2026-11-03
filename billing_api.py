@@ -54,7 +54,7 @@ def _server_client():
 
 def _process_event(event_id: str):
     db = _server_client()
-    event = db.table("webhook_events").select("id,transaction_id,payload,status").eq("id",event_id).limit(1).execute().data
+    event = db.table("webhook_events").select("id,transaction_id,payload,status,attempts").eq("id",event_id).limit(1).execute().data
     if not event or event[0]["status"] == "processed":
         return
     row = event[0]
