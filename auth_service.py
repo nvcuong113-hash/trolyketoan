@@ -3,9 +3,18 @@ import os
 import streamlit as st
 from supabase import Client, create_client
 
+def _setting(name: str):
+    value = os.getenv(name)
+    if value:
+        return value
+    try:
+        return st.secrets.get(name, None)
+    except Exception:
+        return None
+
 def get_public_client() -> Client | None:
-    url = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", None)
-    key = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_PUBLISHABLE_KEY", None)
+    url = _setting("SUPABASE_URL")
+    key = _setting("SUPABASE_PUBLISHABLE_KEY") or _setting("SUPABASE_ANON_KEY")
     if not url or not key:
         return None
     return create_client(url, key)
@@ -23,6 +32,9 @@ def restore_session(client: Client):
     try:
         client.auth.set_session(session["access_token"], session["refresh_token"])
         current = client.auth.get_user()
+        refreshed = getattr(client.auth, "get_session", lambda: None)()
+        if refreshed:
+            save_session(refreshed)
         return current.user
     except Exception:
         st.session_state.pop("auth_session", None)
@@ -39,5 +51,14 @@ def current_subscription(client: Client):
     user = restore_session(client)
     if not user:
         return None
-    result = client.table("subscriptions").select("plan,status,expires_at,tax_codes").eq("user_id", user.id).eq("status","active").order("expires_at", desc=True).limit(1).execute()
-    return result.data[0] if result.data else None
+    result = client.table("subscriptions").select("plan,status,expires_at,tax_codes").eq("user_id", user.id).eq("status","active").order("expires_at", desc=True).limit(5).execute()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    for row in result.data or []:
+        try:
+            expiry = datetime.fromisoformat(row["expires_at"].replace("Z","+00:00"))
+            if expiry > now:
+                return row
+        except Exception:
+            continue
+    return None
