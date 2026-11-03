@@ -275,8 +275,11 @@ with tabs[3]:
         voucher_start = st.number_input("Số thứ tự chứng từ bắt đầu (kiểm tra để tránh trùng)",min_value=1,value=1,step=1)
         if st.button("Ánh xạ dữ liệu vào file mẫu",disabled=not(template and voucher_prefix.strip())):
             try:
-                mapped,missing_fields = map_staging_to_template(edited,template.getvalue(),target,voucher_prefix,int(voucher_start))
+                rows_for_import = edited if st.session_state.get("active_subscription") else edited.head(50)
+                mapped,missing_fields = map_staging_to_template(rows_for_import,template.getvalue(),target,voucher_prefix,int(voucher_start))
                 st.session_state["result_mapped_template"] = mapped
+                if not st.session_state.get("active_subscription"):
+                    st.caption("Gói khách: file import theo mẫu giới hạn 50 dòng đầu.")
                 st.session_state["result_template_missing"] = missing_fields
                 st.success("Đã tạo file trên cấu trúc mẫu được tải lên.")
             except Exception as exc:
