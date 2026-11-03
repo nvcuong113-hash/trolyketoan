@@ -2,7 +2,7 @@
 
 ## Kiến trúc
 - Streamlit: xử lý tệp kế toán trong bộ nhớ phiên, không lưu sao kê/hóa đơn/sổ kế toán vào database.
-- Supabase: chỉ lưu user, profile, subscription và payment metadata.
+- Supabase: chỉ lưu user, profile, subscription, payment metadata và văn bản pháp luật công khai trong private Storage; không lưu sổ sách khách hàng.
 - FastAPI: nhận webhook SePay độc lập.
 - Static GEO site: thư mục web/, deploy Cloudflare Pages với output directory web.
 - Legal RAG: nạp văn bản chính thức theo metadata hiệu lực; chỉ tài liệu được quản trị viên xác nhận mới được truy xuất.
@@ -24,7 +24,7 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 1. Tạo project Supabase.
 2. Chạy toàn bộ supabase/schema.sql trong SQL Editor.
 3. Lấy Project URL và Publishable Key; đặt SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY cho Streamlit.
-4. Lấy Secret Key chỉ dùng phía server; đặt SUPABASE_SECRET_KEY cho webhook service.
+4. Lấy Secret Key chỉ dùng phía server; đặt SUPABASE_SECRET_KEY cho webhook service và bộ nạp kho pháp lý trong Streamlit server.
 5. Không bao giờ đưa Secret Key vào repo hoặc biến môi trường client-side.
 
 ## Cấu hình SePay / VietQR
@@ -61,7 +61,7 @@ pytest -q
 - MISA: mỗi loại chứng từ dùng mẫu Excel riêng; cần tải mẫu chính xác từ phiên bản đang dùng để mapping. MISA SME 2026 nêu các cột bắt buộc cho Thu tiền gửi và Chi tiền gửi gồm ngày hạch toán, ngày chứng từ, số chứng từ. Chương trình không hỗ trợ nhập trực tiếp file sao kê ngân hàng; cần tách Thu tiền gửi, Chi tiền gửi và Chuyển tiền nội bộ thành từng file mẫu riêng.
 - VACOM: chưa có file mẫu thực tế nên chỉ hỗ trợ mapping theo header của file mẫu do người dùng tải lên, chưa xác nhận khả năng import end-to-end.
 - Chữ ký số XML chưa được xác thực mật mã; chưa kết nối tra cứu trạng thái hóa đơn trên cổng Thuế.
-- Legal corpus chưa được đóng gói sẵn và chưa có người kiểm duyệt pháp lý duyệt toàn bộ metadata. Không bật kết luận nếu không có văn bản phù hợp.
+- Legal corpus chưa được đóng gói sẵn; cần người quản trị nạp văn bản, kiểm tra hiệu lực và xác nhận metadata. Tệp được lưu ở Supabase Storage private; chỉ URL nguồn chính thức được chấp nhận. Không bật kết luận nếu không có văn bản phù hợp.
 - P&L là ước tính theo tài khoản và cần map theo hệ thống tài khoản / chế độ kế toán doanh nghiệp.
 - 20 triệu không được hard-code làm ngưỡng thuế cố định; cần xác định điều kiện theo từng loại thuế, kỳ và văn bản áp dụng.
 - SePay/Supabase chưa thể nhận tiền thật cho đến khi chủ tài khoản cung cấp và cấu hình credentials, tài khoản ngân hàng và webhook.
