@@ -340,7 +340,13 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
     elif amount_source in rows.columns:
         rows = rows[rows[amount_source].map(parse_money) > 0]
     rows = rows[~rows.get("Chưa đủ chứng từ", pd.Series(False, index=rows.index)).fillna(False).astype(bool)]
-    # MISA SME imports bank receipts and payments as separate voucher types/files.
+    if rows.empty:
+        raise ValueError(f"Không có dòng dữ liệu đủ chứng từ được đánh dấu loại {expected_type}.")
+    if transaction_type == "chuyen_tien_noi_bo":
+        for field in ("Tài khoản đi","Tài khoản đến"):
+            if field not in rows.columns or rows[field].fillna("").astype(str).str.strip().eq("").any():
+                raise ValueError("Chuyển tiền nội bộ phải điền đủ Tài khoản đi và Tài khoản đến cho từng dòng.")
+    # MISA SME imports each bank voucher type using its own workbook template.
     style_source = chosen_sheet[header_row+1] if chosen_sheet.max_row >= header_row+1 else None
     for out_idx, (_, source) in enumerate(rows.iterrows(), start=header_row+1):
         for key, col_idx in mapping.items():
