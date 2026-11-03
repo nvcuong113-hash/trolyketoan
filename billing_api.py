@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
@@ -59,7 +60,8 @@ def _process_event(event_id: str):
     row = event[0]
     try:
         parsed = parse_sepay_event(row["payload"])
-        db.table("webhook_events").update({"status":"processing","attempts":1}).eq("id",event_id).execute()
+        attempts = int(row.get("attempts") or 0) + 1
+        db.table("webhook_events").update({"status":"processing","attempts":attempts}).eq("id",event_id).execute()
         result = db.rpc("apply_sepay_payment", {
             "p_transaction_id": parsed["transaction_id"],
             "p_content": parsed["content"],
@@ -67,12 +69,12 @@ def _process_event(event_id: str):
             "p_payload": parsed["payload"],
         }).execute()
         db.table("webhook_events").update({
-            "status":"processed", "processed_at":"now()", "last_error":None,
+            "status":"processed", "processed_at":datetime.now(timezone.utc).isoformat(), "last_error":None,
             "processing_result":result.data
         }).eq("id",event_id).execute()
     except Exception as exc:
         db.table("webhook_events").update({
-            "status":"failed", "attempts":1, "last_error":str(exc)[:1000]
+            "status":"failed", "attempts":int(row.get("attempts") or 0)+1, "last_error":str(exc)[:1000]
         }).eq("id",event_id).execute()
 
 
@@ -113,7 +115,7 @@ async def sepay_webhook(request: Request, background_tasks: BackgroundTasks,
         raise HTTPException(status_code=400,detail=f"Payload không hợp lệ: {exc}") from exc
     expected_account = os.getenv("PAYMENT_ACCOUNT","").strip()
     received_account = str(payload.get("accountNumber") or "").strip()
-    if expected_account and received_account and not hmac.compare_digest(expected_account,received_account):
+    if expected_account and not hmac.compare_digest(expected_account,received_account):
         raise HTTPException(status_code=400,detail="Giao dịch không vào tài khoản nhận tiền đã cấu hình")
     try:
         db = _server_client()
