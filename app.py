@@ -7,6 +7,9 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from core import aging_report, build_staging, cashflow_summary, excel_bytes, mask_sensitive, parse_invoice_upload, read_tabular_bytes, reconcile_bank
 from accounting_extensions import advanced_pre_audit, build_executive_pnl, build_sepay_qr_url, map_staging_to_template, reconcile_payables
