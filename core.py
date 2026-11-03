@@ -168,6 +168,9 @@ def subset_sum_indices(amounts: Iterable[object], target: object, epsilon: int =
         for total, chosen in updates.items():
             if total not in states or len(chosen) < len(states[total]):
                 states[total] = chosen
+        # Hard memory ceiling: return "unmatched" rather than risking worker exhaustion.
+        if len(states) > 200_000:
+            return None
         matches = [(total, chosen) for total, chosen in states.items() if chosen and abs(total-target_i) <= epsilon]
         if matches:
             return list(min(matches, key=lambda item: (len(item[1]), abs(item[0]-target_i)))[1])
@@ -447,7 +450,7 @@ def pre_audit(journal: pd.DataFrame, invoice_register: pd.DataFrame | None = Non
         if not row["_debit"] or not row["_credit"]:
             findings.append({"Nhóm kiểm tra": "Thiếu tài khoản đối ứng", "Ngày": row["_date"], "Dòng dữ liệu": int(idx)+2,
                              "Giá trị": row["_amount"], "Cảnh báo": "Thiếu tài khoản Nợ hoặc Có"})
-        if row["_debit"].startswith("1111") and row["_amount"] >= 20_000_000 and any(
+        if (row["_debit"].startswith("1111") or row["_credit"].startswith("1111")) and row["_amount"] >= 20_000_000 and any(
             word in normalize_text(row["_desc"]) for word in ("hoa don", "mua hang", "dich vu")
         ):
             findings.append({"Nhóm kiểm tra": "Rà soát thanh toán không dùng tiền mặt", "Ngày": row["_date"], "Dòng dữ liệu": int(idx)+2,
