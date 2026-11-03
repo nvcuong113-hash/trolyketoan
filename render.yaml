@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: trolyketoan-sepay-webhook
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn billing_api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SEPAY_WEBHOOK_API_KEY
+        sync: false
