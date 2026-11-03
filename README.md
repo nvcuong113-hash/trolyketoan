@@ -8,16 +8,17 @@
 - Legal RAG: nạp văn bản chính thức theo metadata hiệu lực; chỉ tài liệu được quản trị viên xác nhận mới được truy xuất.
 
 ## Chạy Streamlit local
-\`\`\`bash
+1. Sao chép .env.example thành .env và điền cấu hình local; .env đã được .gitignore.
+```bash
 python -m venv .venv
 pip install -r requirements.txt
 streamlit run app.py
-\`\`\`
+```
 
 ## Chạy webhook backend
-\`\`\`bash
+```bash
 uvicorn billing_api:app --host 0.0.0.0 --port 8000
-\`\`\`
+```
 
 ## Cấu hình Supabase
 1. Tạo project Supabase.
@@ -27,11 +28,11 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 5. Không bao giờ đưa Secret Key vào repo hoặc biến môi trường client-side.
 
 ## Cấu hình SePay / VietQR
-- Đặt SEPAY_WEBHOOK_API_KEY ở backend và cấu hình cùng API Key trên SePay Webhook.
+- Khuyến nghị đặt SEPAY_WEBHOOK_HMAC_SECRET và chọn HMAC-SHA256 trên SePay; API Key (SEPAY_WEBHOOK_API_KEY) là phương án thay thế.
 - URL webhook: /webhooks/sepay.
-- Chọn sự kiện tiền vào, bật xác thực API Key.
+- Chọn sự kiện tiền vào, bật xác thực HMAC-SHA256 hoặc API Key tương ứng với biến môi trường server.
 - Đặt PAYMENT_BANK, PAYMENT_ACCOUNT, PAYMENT_ACCOUNT_HOLDER; nếu tài khoản VietinBank thuộc nhóm yêu cầu prefix, bật PAYMENT_REQUIRE_SEVQR=true.
-- SePay yêu cầu HTTP 200/201 và JSON {"success": true}; webhook có thể retry, do đó DB xử lý idempotent theo transaction ID.
+- SePay yêu cầu HTTP 200/201 và JSON {"success": true}; webhook được ghi vào hàng đợi bền vững trước khi phản hồi, xử lý nền và cron worker thử lại. DB chống trùng theo transaction ID.
 - Dùng tính năng gửi thử webhook trước khi nhận tiền thật.
 
 ## Cấu hình AI RAG
@@ -41,10 +42,10 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 - Kho tài liệu hiện lưu trong session RAM; chưa có quy trình admin publish corpus bền vững vào bản deploy.
 
 ## Kiểm thử
-\`\`\`bash
+```bash
 python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py
 pytest -q
-\`\`\`
+```
 
 ## Các nghiệp vụ đã có
 - FR-01: đối soát tiền vào, ghép hóa đơn trả gộp cùng đối tác; gợi ý phân loại tiền ra.
@@ -64,10 +65,10 @@ pytest -q
 - P&L là ước tính theo tài khoản và cần map theo hệ thống tài khoản / chế độ kế toán doanh nghiệp.
 - 20 triệu không được hard-code làm ngưỡng thuế cố định; cần xác định điều kiện theo từng loại thuế, kỳ và văn bản áp dụng.
 - SePay/Supabase chưa thể nhận tiền thật cho đến khi chủ tài khoản cung cấp và cấu hình credentials, tài khoản ngân hàng và webhook.
-- Session TTL được kiểm tra khi Streamlit rerun; không đảm bảo xóa tức thì nếu browser treo/worker vẫn giữ phiên.
-- NFR hiệu năng 5.000 dòng/3 giây cần benchmark trên mẫu thực tế từng ngân hàng, chưa được chứng nhận.
+- Dữ liệu tạm được xóa sau download theo mặc định và có nút xóa thủ công. Session TTL được kiểm tra khi Streamlit rerun; không đảm bảo xóa tức thì nếu browser treo/worker vẫn giữ phiên.
+- CI có benchmark hồi quy 5.000 dòng/3 giây trên GitHub runner; vẫn cần benchmark với mẫu thực tế từng ngân hàng trước khi cam kết SLA production.
 
 ## Deploy
 - Streamlit Community Cloud: chọn repository, branch, main file app.py, cấu hình secrets theo .env.example.
 - Webhook API: deploy billing_api.py lên Render/Railway/VPS và cấu hình biến môi trường server-only.
-- Static front door: Cloudflare Pages, output directory web. Trước khi public, cập nhật appUrl trong web/index.html sang URL Streamlit thực tế.
+- Static front door: Cloudflare Pages, output directory web. Trước khi public, cập nhật window.TROLY_APP_URL trong web/config.js sang URL Streamlit thực tế.
