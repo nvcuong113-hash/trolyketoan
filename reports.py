@@ -50,21 +50,37 @@ def management_report_pdf(cashflow: dict[str, Any], pnl: dict[str, Any] | None =
     table.set_fontsize(9)
     table.scale(1.0, 1.55)
 
-    pnl_ax = fig.add_axes([0.54, 0.17, 0.38, 0.27])
+    pnl_ax = fig.add_axes([0.54, 0.30, 0.38, 0.17])
     pnl_ax.axis("off")
     if pnl:
+        operating = float(pnl.get("Chi phí bán hàng và quản lý", 0))
+        financial = float(pnl.get("Chi phí tài chính thuần", 0))
+        other = float(pnl.get("Chi phí khác và thuế TNDN", 0))
         pnl_rows = [
             ["Chỉ tiêu P&L ước tính", "Giá trị (VNĐ)"],
             ["Doanh thu thuần", f"{pnl.get('Doanh thu thuần', pnl.get('Doanh thu', 0)):,.0f}"],
             ["Giá vốn", f"{pnl.get('Giá vốn', 0):,.0f}"],
-            ["Chi phí", f"{pnl.get('Tổng chi phí', pnl.get('Chi phí', 0)):,.0f}"],
+            ["Chi phí bán hàng & QL", f"{operating:,.0f}"],
+            ["Chi phí tài chính thuần", f"{financial:,.0f}"],
+            ["Chi phí khác & thuế TNDN", f"{other:,.0f}"],
             ["Lợi nhuận ước tính", f"{pnl.get('Lợi nhuận ước tính', 0):,.0f}"],
         ]
         ptable = pnl_ax.table(cellText=pnl_rows[1:], colLabels=pnl_rows[0],
                               cellLoc="left", colLoc="left", loc="center")
         ptable.auto_set_font_size(False)
-        ptable.set_fontsize(9)
-        ptable.scale(1.0, 1.75)
+        ptable.set_fontsize(7.5)
+        ptable.scale(1.0, 1.18)
+        debt_ax = fig.add_axes([0.54, 0.13, 0.38, 0.14])
+        debt_ax.axis("off")
+        def debt_lines(items):
+            return "\n".join(
+                f"• {str(item.get('Đối tác',''))[:24]}: {float(item.get('Số tiền',0)):,.0f}"
+                for item in (items or [])[:5]
+            ) or "Chưa có dữ liệu"
+        debt_ax.text(0.0, 0.95, "TOP 5 PHẢI THU", fontsize=8, fontweight="bold", va="top")
+        debt_ax.text(0.0, 0.78, debt_lines(pnl.get("Top 5 phải thu")), fontsize=7, va="top")
+        debt_ax.text(0.52, 0.95, "TOP 5 PHẢI TRẢ", fontsize=8, fontweight="bold", va="top")
+        debt_ax.text(0.52, 0.78, debt_lines(pnl.get("Top 5 phải trả")), fontsize=7, va="top")
     else:
         pnl_ax.text(0.0, 0.75, "Chưa có dữ liệu P&L trong phiên.", fontsize=10)
         pnl_ax.text(0.0, 0.55, "Tải sổ chi tiết để lập báo cáo lãi lỗ ước tính.", fontsize=9)
