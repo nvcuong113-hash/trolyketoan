@@ -210,7 +210,7 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
         "dien giai": ("Diễn giải", "Diễn giải chuẩn", "Diễn giải gốc", "Nội dung", "Description"),
         "tai khoan no": ("Tài khoản Nợ", "TK Nợ", "Tài khoản hạch toán Nợ"),
         "tai khoan co": ("Tài khoản Có", "TK Có", "Tài khoản hạch toán Có"),
-        "so tien": ("Số tiền", "Tiền thu", "Tiền chi", "Số tiền quy đổi"),
+        "so tien": ("Số tiền", "Số tiền thu", "Số tiền chi", "Tiền thu", "Tiền chi", "Số tiền quy đổi"),
         "ma hoa don": ("Số hóa đơn", "Mã hóa đơn", "Invoice number"),
         "ma so thue": ("Mã số thuế", "MST", "Tax code"),
     }
@@ -222,7 +222,9 @@ def map_staging_to_template(staging: pd.DataFrame, template_bytes: bytes,
         "so tien": ("Tiền thu",) if transaction_type == "thu_tien_gui" else ("Tiền chi",),
         "ma hoa don": ("Mã hóa đơn",), "ma so thue": ("Mã số thuế",),
     }
-    required = {"ngay hach toan", "ngay chung tu", "so chung tu", "tai khoan no", "tai khoan co", "so tien"}
+    # MISA SME 2026 documents only these three mandatory mappings for bank receipts/payments.
+    # Other mapped fields are retained when present in the user's actual template.
+    required = {"ngay hach toan", "ngay chung tu", "so chung tu"}
     chosen_sheet, header_row, mapping, best_score = None, None, None, -1
     for ws in wb.worksheets:
         for row_idx in range(1, min(ws.max_row, 40)+1):
