@@ -425,7 +425,7 @@ def _register_result(left: dict | None, right: dict | None, status: str) -> dict
 
 
 def map_invoice_payments(invoices: pd.DataFrame, transactions: pd.DataFrame,
-                         epsilon: int = EPSILON_VND) -> tuple[pd.DataFrame, pd.DataFrame]:
+                         epsilon: int = EPSILON_VND) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Conservative supplier-payment mapping: explicit reference, unique exact match, then same-supplier subset sum."""
     invoice_number_col = _find_column(invoices.columns, ["Số hóa đơn", "invoice_number"], required=True)
     inv_tax_col = _find_column(invoices.columns, ["MST người bán", "seller_tax_code", "MST đối tác"])
@@ -496,7 +496,14 @@ def map_invoice_payments(invoices: pd.DataFrame, transactions: pd.DataFrame,
             chosen = [explicit_hits[0][0]]
             score, reason = explicit_hits[0][1], "Số hóa đơn/mã tham chiếu xuất hiện trong nội dung"
         elif len(explicit_hits) > 1:
-            reason = "Nội dung chứa nhiều số hóa đơn cùng phù hợp; cần kế toán xác nhận"
+            explicit_ids = [c[0] for c in explicit_hits]
+            explicit_total = sum(remaining[idx] for idx in explicit_ids)
+            if abs(explicit_total - amount) <= epsilon:
+                chosen = explicit_ids
+                score = 90
+                reason = "Nội dung chuyển khoản liệt kê nhiều hóa đơn và tổng tiền khớp"
+            else:
+                reason = "Nội dung chứa nhiều số hóa đơn nhưng tổng tiền không khớp; cần kế toán xác nhận"
         elif len(exact_hits) == 1:
             chosen = [exact_hits[0][0]]
             score, reason = exact_hits[0][1], "Đối tác định danh được và số tiền khớp duy nhất"
