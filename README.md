@@ -45,9 +45,10 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 ## AI OCR chứng từ & mapping (FR-09)
 - Cấu hình `OPENAI_API_KEY` và tùy chọn `OPENAI_MODEL` (mặc định `gpt-4o-mini`) trong Streamlit Secrets.
 - Hỗ trợ PDF, PNG, JPG/JPEG tối đa 25 MB/tệp; tối đa 15 tệp/lượt. PDF được gửi dưới dạng `input_file` để mô hình đọc text và ảnh trang; ảnh dùng `input_image`.
-- Nội dung được gửi trực tiếp trong request Responses API dưới dạng base64; ứng dụng không tạo bản ghi Files API, không ghi file lên ổ đĩa và không lưu dữ liệu kế toán vào Supabase. Người dùng phải chủ động tick xác nhận trước khi OCR.
+- Nội dung được gửi trực tiếp trong request Responses API dưới dạng base64 với `store=False`; ứng dụng không tạo bản ghi Files API, không ghi file lên ổ đĩa và không lưu dữ liệu kế toán vào Supabase. Cài đặt này tắt lưu response object, không đồng nghĩa nhà cung cấp không xử lý/ghi log theo chính sách dịch vụ. Người dùng phải chủ động tick xác nhận trước khi OCR.
 - Sau OCR, kiểm tra/sửa dữ liệu nhận diện trước khi mapping. Engine giữ nguyên hậu tố MST chi nhánh, chuẩn hóa số 0 đầu số hóa đơn, gộp dòng thuế suất và không tự ghép khi MST xung đột hoặc có nhiều ứng viên.
 - Mapping hóa đơn–sao kê/UNC chỉ là đề xuất trong phiên. Kế toán xác nhận thủ công; không tự hạch toán hoặc cập nhật sổ kế toán.
+- Đối chiếu bảng kê hỗ trợ biến thể header ngân hàng Việt Nam như `Phát sinh Nợ/Có`, `PS Nợ/Có`, `Ngày GD`, `Diễn giải`, `Mã GD`; dòng có cả Nợ và Có bị đưa về chiều `unknown` và không tự mapping.
 - Chi phí API phụ thuộc số trang, độ chi tiết PDF và model. Dùng `low` để giảm token khi chứng từ rõ; dùng `high` cho scan/chữ nhỏ.
 
 ## Kiểm thử
