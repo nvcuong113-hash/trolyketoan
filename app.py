@@ -1,604 +1,798 @@
 from __future__ import annotations
 
 import gc
-import io
-import re
-import uuid
-import zipfile
-from datetime import date, datetime
-from difflib import SequenceMatcher
-from itertools import combinations
-from pathlib import Path
-import xml.etree.ElementTree as ET
+import os
+import time
+from datetime import date
 
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 
-APP_NAME = "Trợ lý Kế toán SME"
-SESSION_TTL_SECONDS = 600
-MAX_COMBINATION_SIZE = 12
-EPSILON_VND = 1000
+load_dotenv()
 
-st.set_page_config(page_title=APP_NAME, page_icon="🧾", layout="wide")
+from core import aging_report, build_staging, cashflow_summary, excel_bytes, mask_sensitive, parse_invoice_upload, read_tabular_bytes, reconcile_bank
+from accounting_extensions import advanced_pre_audit, build_executive_pnl, build_sepay_qr_url, map_staging_to_template, reconcile_payables
+from auth_service import get_public_client, get_admin_client, restore_session, save_session, sign_in, current_subscription
+from legal_rag import build_legal_index, retrieve_legal_context, answer_with_gemini, make_checklist_xlsx
+from legal_storage import publish_legal_document, load_published_legal_documents
+from sample_data import sample_workbook, sample_xml_zip, sample_legal_questions
+from reports import management_report_pdf
+from document_ai import extract_document, documents_to_dataframes, normalize_bank_statement, reconcile_invoice_registers, map_invoice_payments
 
-# ----------------------------- Shared utilities -----------------------------
-def money(value):
-    if pd.isna(value):
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    raw = str(value).strip().replace("₫", "").replace("VND", "").replace(" ", "")
-    if not raw:
-        return 0.0
-    # Vietnamese exports commonly use 1.234.567 or 1,234,567.
-    if "," in raw and "." in raw:
-        raw = raw.replace(".", "").replace(",", ".") if raw.rfind(",") > raw.rfind(".") else raw.replace(",", "")
-    elif raw.count(".") > 1 or raw.count(",") > 1:
-        raw = raw.replace(".", "").replace(",", "")
-    elif "," in raw:
-        tail = raw.rsplit(",", 1)[-1]
-        raw = raw.replace(",", ".") if len(tail) <= 2 else raw.replace(",", "")
-    try:
-        return float(raw)
-    except ValueError:
-        return 0.0
+st.set_page_config(page_title="Trợ lý Kế toán SME", page_icon="🧾", layout="wide")
+TTL_SECONDS = 600
+PLAN_LABELS = {"internal": "Kế toán Nội bộ", "service": "Kế toán Dịch vụ"}
 
-def norm_text(value):
-    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+def upload_key(name):
+    return f"{name}_{st.session_state.get('_upload_epoch',0)}"
 
-def similarity(a, b):
-    return SequenceMatcher(None, norm_text(a), norm_text(b)).ratio()
-
-def find_column(columns, aliases):
-    normalized = {norm_text(c): c for c in columns}
-    for alias in aliases:
-        if norm_text(alias) in normalized:
-            return normalized[norm_text(alias)]
-    for c in columns:
-        if any(norm_text(alias) in norm_text(c) for alias in aliases):
-            return c
-    return None
-
-def read_tabular(uploaded, aliases=None):
-    raw = uploaded.getvalue()
-    name = uploaded.name.lower()
-    if name.endswith(".csv"):
-        try:
-            df = pd.read_csv(io.BytesIO(raw), dtype=str, encoding="utf-8-sig")
-        except UnicodeDecodeError:
-            df = pd.read_csv(io.BytesIO(raw), dtype=str, encoding="cp1258")
-        return df
-    if not name.endswith((".xlsx", ".xls")):
-        raise ValueError("Chỉ hỗ trợ tệp Excel hoặc CSV ở chức năng này.")
-    book = pd.ExcelFile(io.BytesIO(raw))
-    best, best_score = None, -1
-    for sheet in book.sheet_names:
-        candidate = pd.read_excel(book, sheet_name=sheet, header=None, dtype=object)
-        score = 0
-        for _, row in candidate.head(20).iterrows():
-            cells = [norm_text(x) for x in row.tolist()]
-            row_score = sum(any(norm_text(a) in cell for cell in cells for a in aliases or []) for a in (aliases or []))
-            if row_score > score:
-                score = row_score
-                header_idx = _
-        if score > best_score:
-            best, best_score = (candidate, header_idx if score else 0), score
-    raw_df, header_idx = best
-    headers = [str(x).strip() if pd.notna(x) else f"Col_{i}" for i, x in enumerate(raw_df.iloc[header_idx])]
-    df = raw_df.iloc[header_idx + 1:].copy()
-    df.columns = headers
-    return df.dropna(how="all").reset_index(drop=True)
-
-def to_excel_bytes(sheets):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        for sheet_name, frame in sheets.items():
-            (frame if isinstance(frame, pd.DataFrame) else pd.DataFrame(frame)).to_excel(
-                writer, index=False, sheet_name=sheet_name[:31]
-            )
-    output.seek(0)
-    return output.getvalue()
-
-def mask_sensitive(text):
-    value = str(text or "")
-    value = re.sub(r"(?<!\d)\d{8,16}(?!\d)", "[STK_BANK]", value)
-    value = re.sub(r"(?<!\d)\d{10}(?:\d{3})?(?!\d)", "[MST]", value)
-    value = re.sub(r"(?<!\d)0\d{9}(?!\d)", "[SDT]", value)
-    return value
-
-def clear_session_data():
-    keep = {"_last_activity", "_authenticated_demo"}
+def clear_data():
+    # Keep authentication and increment uploader epoch so every uploaded file
+    # widget is recreated empty on the next run.
+    next_epoch = int(st.session_state.get("_upload_epoch",0)) + 1
     for key in list(st.session_state.keys()):
-        if key not in keep:
-            del st.session_state[key]
+        if key not in {"auth_session", "_last_activity", "_upload_epoch"}:
+            try:
+                del st.session_state[key]
+            except Exception:
+                pass
+    st.session_state["_upload_epoch"] = next_epoch
     gc.collect()
 
-def check_session_ttl():
-    now = datetime.now().timestamp()
-    last = st.session_state.get("_last_activity", now)
-    if now - last > SESSION_TTL_SECONDS:
-        clear_session_data()
-        st.warning("Phiên đã hết thời gian không hoạt động. Dữ liệu làm việc tạm đã được xóa.")
-    st.session_state["_last_activity"] = now
+now = time.time()
+if now - st.session_state.get("_last_activity", now) > TTL_SECONDS:
+    clear_data()
+    st.toast("Phiên làm việc đã quá 10 phút không hoạt động; dữ liệu tạm đã được xóa.", icon="🧹")
+st.session_state["_last_activity"] = now
 
-def money_column(df, aliases):
-    col = find_column(df.columns, aliases)
-    if not col:
-        return pd.Series([0.0] * len(df), index=df.index), None
-    return df[col].map(money), col
-
-def date_column(df, aliases):
-    col = find_column(df.columns, aliases)
-    if not col:
-        return pd.Series([pd.NaT] * len(df), index=df.index), None
-    return pd.to_datetime(df[col], errors="coerce", dayfirst=True), col
-
-def subset_sum_indices(amounts, target, epsilon=EPSILON_VND, max_items=MAX_COMBINATION_SIZE):
-    # Bounded backtracking: sorted descending, with suffix pruning.
-    vals = [(i, int(round(money(v)))) for i, v in enumerate(amounts) if money(v) > 0]
-    vals.sort(key=lambda x: x[1], reverse=True)
-    if not vals or len(vals) > 80:
-        return None
-    suffix = [0] * (len(vals) + 1)
-    for i in range(len(vals) - 1, -1, -1):
-        suffix[i] = suffix[i + 1] + vals[i][1]
-    def dfs(start, chosen, total):
-        if chosen and abs(total - target) <= epsilon:
-            return [vals[j][0] for j in chosen]
-        if len(chosen) >= max_items or start >= len(vals) or total > target + epsilon:
-            return None
-        if total + suffix[start] < target - epsilon:
-            return None
-        for j in range(start, len(vals)):
-            if total + vals[j][1] > target + epsilon:
-                continue
-            found = dfs(j + 1, chosen + [j], total + vals[j][1])
-            if found is not None:
-                return found
-        return None
-    return dfs(0, [], 0)
-
-# ----------------------------- FR-01 bank matching -----------------------------
-def reconcile_bank(bank, invoices, threshold=0.80):
-    b = bank.copy()
-    inv = invoices.copy()
-    b_date, _ = date_column(b, ["Ngày giao dịch", "Ngày hạch toán", "Transaction date", "Date"])
-    b_in, _ = money_column(b, ["Số tiền ghi Có", "Ghi Có", "Tiền vào", "Credit", "Amount in"])
-    b_out, _ = money_column(b, ["Số tiền ghi Nợ", "Ghi Nợ", "Tiền ra", "Debit", "Amount out"])
-    desc_col = find_column(b.columns, ["Nội dung giao dịch", "Diễn giải", "Description", "Transaction details"])
-    if not desc_col:
-        raise ValueError("Không tìm thấy cột Nội dung giao dịch/Diễn giải trong sao kê.")
-    b["Ngày giao dịch chuẩn"] = b_date
-    b["Tiền vào"] = b_in
-    b["Tiền ra"] = b_out
-    b["Nội dung"] = b[desc_col].fillna("").astype(str)
-    inv_amount, _ = money_column(inv, ["Số tiền phải thu", "Còn phải thu", "Amount", "Outstanding"])
-    inv_no = find_column(inv.columns, ["Số hóa đơn", "Mã đơn hàng", "Invoice number", "Mã chứng từ"])
-    inv_name = find_column(inv.columns, ["Tên khách hàng", "Khách hàng", "Customer name"])
-    inv_id = find_column(inv.columns, ["Mã khách hàng", "Customer code"])
-    inv["Số tiền chuẩn"] = inv_amount
-    inv["Số hóa đơn chuẩn"] = inv[inv_no].astype(str) if inv_no else ""
-    inv["Tên KH chuẩn"] = inv[inv_name].astype(str) if inv_name else ""
-    inv["Mã KH chuẩn"] = inv[inv_id].astype(str) if inv_id else ""
-    inv["Đã ghép"] = False
-    results = []
-    for idx, row in b.iterrows():
-        amount = int(round(row["Tiền vào"]))
-        if amount <= 0:
-            continue
-        desc = norm_text(row["Nội dung"])
-        candidates = []
-        for j, invoice in inv.loc[~inv["Đã ghép"]].iterrows():
-            if abs(invoice["Số tiền chuẩn"] - amount) > EPSILON_VND:
-                continue
-            number_hit = bool(invoice["Số hóa đơn chuẩn"].strip() and norm_text(invoice["Số hóa đơn chuẩn"]) in desc)
-            name_score = similarity(invoice["Tên KH chuẩn"], row["Nội dung"]) if invoice["Tên KH chuẩn"] else 0
-            if number_hit or name_score >= threshold:
-                candidates.append((j, "Số hóa đơn" if number_hit else f"Tên KH {name_score:.0%}"))
-        if candidates:
-            j, reason = candidates[0]
-            inv.at[j, "Đã ghép"] = True
-            results.append({"Mã giao dịch": idx + 1, "Ngày": row["Ngày giao dịch chuẩn"], "Số tiền": amount,
-                            "Nội dung": row["Nội dung"], "Kết quả": "Khớp 1-1",
-                            "Hóa đơn": inv.at[j, "Số hóa đơn chuẩn"], "Khách hàng": inv.at[j, "Tên KH chuẩn"], "Căn cứ": reason})
-            continue
-        # Try subset sum only against likely customer names found in transfer description.
-        likely = []
-        for j, invoice in inv.loc[~inv["Đã ghép"]].iterrows():
-            score = similarity(invoice["Tên KH chuẩn"], row["Nội dung"]) if invoice["Tên KH chuẩn"] else 0
-            if score >= threshold or (invoice["Tên KH chuẩn"] and norm_text(invoice["Tên KH chuẩn"]) in desc):
-                likely.append(j)
-        if likely:
-            subset = subset_sum_indices(inv.loc[likely, "Số tiền chuẩn"].tolist(), amount)
-            if subset:
-                chosen = [likely[k] for k in subset]
-                for j in chosen:
-                    inv.at[j, "Đã ghép"] = True
-                results.append({"Mã giao dịch": idx + 1, "Ngày": row["Ngày giao dịch chuẩn"], "Số tiền": amount,
-                                "Nội dung": row["Nội dung"], "Kết quả": "Khớp trả gộp (1-N)",
-                                "Hóa đơn": ", ".join(inv.loc[chosen, "Số hóa đơn chuẩn"].tolist()),
-                                "Khách hàng": ", ".join(inv.loc[chosen, "Tên KH chuẩn"].dropna().unique().tolist()),
-                                "Căn cứ": f"Tổng {sum(inv.loc[chosen, 'Số tiền chuẩn']):,.0f} VND"})
-                continue
-        results.append({"Mã giao dịch": idx + 1, "Ngày": row["Ngày giao dịch chuẩn"], "Số tiền": amount,
-                        "Nội dung": row["Nội dung"], "Kết quả": "Chưa xác định", "Hóa đơn": "", "Khách hàng": "", "Căn cứ": ""})
-    result = pd.DataFrame(results)
-    if result.empty:
-        result = pd.DataFrame(columns=["Mã giao dịch", "Ngày", "Số tiền", "Nội dung", "Kết quả", "Hóa đơn", "Khách hàng", "Căn cứ"])
-    return result, inv.loc[~inv["Đã ghép"]].copy()
-
-# ----------------------------- FR-02 XML invoice checks -----------------------------
-def local_tag(tag):
-    return tag.split("}")[-1].split(":")[-1]
-
-def parse_invoice_xml(xml_bytes, company_tax="", company_name=""):
-    root = ET.fromstring(xml_bytes)
-    values = {}
-    aliases = {
-        "seller_name": ["Ten", "TenNBan", "TenNguoiBan"],
-        "buyer_name": ["TenNMua", "TenNguoiMua"],
-        "buyer_tax": ["MSTNMua", "MSTNguoiMua"],
-        "seller_tax": ["MSTNBan", "MSTNguoiBan"],
-        "invoice_no": ["SHDon"],
-        "invoice_date": ["NLap"],
-        "pre_tax": ["TgTCThue"],
-        "vat": ["TgTThue"],
-        "total": ["TgTTTBSo"],
-        "signature": ["DSign"],
-    }
-    flat = {}
-    for elem in root.iter():
-        tag = local_tag(elem.tag)
-        if elem.text and elem.text.strip():
-            flat.setdefault(tag, elem.text.strip())
-        for key, value in elem.attrib.items():
-            flat.setdefault(local_tag(key), value)
-    for field, tags in aliases.items():
-        values[field] = next((flat[t] for t in tags if t in flat), "")
-    buyer_tax = re.sub(r"\D", "", values["buyer_tax"])
-    expected_tax = re.sub(r"\D", "", company_tax or "")
-    errors = []
-    if expected_tax and buyer_tax and buyer_tax != expected_tax:
-        errors.append("Sai mã số thuế người mua")
-    if company_name and values["buyer_name"] and similarity(company_name, values["buyer_name"]) < 0.80:
-        errors.append("Tên người mua khác thông tin doanh nghiệp")
-    if not values["signature"]:
-        errors.append("Không tìm thấy thông tin chữ ký số DSign")
-    values["buyer_tax"] = buyer_tax
-    values["pre_tax"] = money(values["pre_tax"])
-    values["vat"] = money(values["vat"])
-    values["total"] = money(values["total"])
-    values["status"] = "Cần kiểm tra" if errors else "Hợp lệ theo kiểm tra cơ bản"
-    values["warnings"] = "; ".join(errors)
-    return values
-
-def parse_xml_upload(uploaded, company_tax, company_name):
-    files = []
-    raw = uploaded.getvalue()
-    if uploaded.name.lower().endswith(".zip"):
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            for name in archive.namelist():
-                if name.lower().endswith(".xml") and not name.startswith("__MACOSX"):
-                    try:
-                        row = parse_invoice_xml(archive.read(name), company_tax, company_name)
-                        row["Tên tệp"] = Path(name).name
-                        files.append(row)
-                    except Exception as exc:
-                        files.append({"Tên tệp": Path(name).name, "status": "Lỗi đọc XML", "warnings": str(exc)})
-    else:
-        row = parse_invoice_xml(raw, company_tax, company_name)
-        row["Tên tệp"] = uploaded.name
-        files.append(row)
-    return pd.DataFrame(files)
-
-# ----------------------------- FR-03 accounting mappings -----------------------------
-def suggest_account(description, direction="out", standard="133"):
-    text = norm_text(description)
-    if direction == "in":
-        return "1121", "131", "Thu tiền khách hàng"
-    if any(x in text for x in ["điện", "nước", "internet", "văn phòng phẩm", "ship", "vận chuyển", "thuê văn phòng"]):
-        return "642", "1121", "Chi phí vận hành (cần kiểm tra VAT)"
-    if any(x in text for x in ["nhà cung cấp", "thanh toán ncc", "mua hàng", "tiền hàng"]):
-        return "331", "1121", "Thanh toán nhà cung cấp"
-    if any(x in text for x in ["tạm ứng", "ứng trước", "hoàn ứng"]):
-        return "141", "1121", "Tạm ứng nhân viên"
-    if any(x in text for x in ["lương", "tiền công", "salary"]):
-        return "334", "1121", "Thanh toán lương"
-    return "", "", "Chưa đủ thông tin - kế toán cần chọn tài khoản"
-
-def make_staging(transactions):
-    rows = []
-    for _, row in transactions.iterrows():
-        amount_in = money(row.get("Tiền vào", row.get("amount_in", 0)))
-        amount_out = money(row.get("Tiền ra", row.get("amount_out", 0)))
-        desc = str(row.get("Nội dung", row.get("Diễn giải", "")))
-        debit, credit, note = suggest_account(desc, "in" if amount_in > 0 else "out")
-        rows.append({"trans_id": str(uuid.uuid4()), "trans_date": row.get("Ngày", row.get("Ngày giao dịch chuẩn", pd.NaT)),
-                     "partner_tax_code": "", "partner_name": row.get("Khách hàng", ""),
-                     "raw_description": desc, "std_description": note, "amount_in": amount_in,
-                     "amount_out": amount_out, "vat_amount": 0, "matched_invoices": row.get("Hóa đơn", ""),
-                     "doc_status": "MISSING_INV" if row.get("Chưa đủ chứng từ", False) else "UNMATCHED",
-                     "debit_account": debit, "credit_account": credit,
-                     "Chưa đủ chứng từ": bool(row.get("Chưa đủ chứng từ", False))})
-    return pd.DataFrame(rows)
-
-# ----------------------------- FR-05 pre-audit checks -----------------------------
-def pre_audit(journal, invoice_register=None):
-    findings = []
-    date_col = find_column(journal.columns, ["Ngày hạch toán", "Ngày chứng từ", "Ngày", "Date"])
-    debit_col = find_column(journal.columns, ["Tài khoản Nợ", "TK Nợ", "Debit account"])
-    credit_col = find_column(journal.columns, ["Tài khoản Có", "TK Có", "Credit account"])
-    amount_col = find_column(journal.columns, ["Số tiền", "Phát sinh Nợ", "Amount"])
-    desc_col = find_column(journal.columns, ["Diễn giải", "Nội dung", "Description"])
-    if not date_col or not amount_col:
-        raise ValueError("Sổ nhật ký chung cần có cột Ngày và Số tiền/Phát sinh.")
-    dates = pd.to_datetime(journal[date_col], errors="coerce", dayfirst=True)
-    amounts = journal[amount_col].map(money)
-    debit = journal[debit_col].astype(str) if debit_col else pd.Series("", index=journal.index)
-    credit = journal[credit_col].astype(str) if credit_col else pd.Series("", index=journal.index)
-    desc = journal[desc_col].astype(str) if desc_col else pd.Series("", index=journal.index)
-    cash = (debit.str.contains(r"^1111", regex=True) * amounts) - (credit.str.contains(r"^1111", regex=True) * amounts)
-    running = cash.groupby(dates).sum().sort_index().cumsum()
-    for day, balance in running.items():
-        if balance < 0:
-            findings.append({"Nhóm kiểm tra": "Âm quỹ tiền mặt", "Ngày": day, "Dòng dữ liệu": "", "Giá trị": balance,
-                             "Cảnh báo": "Số dư lũy kế 1111 âm theo dữ liệu được cung cấp"})
-    if debit_col and credit_col:
-        for idx in journal.index:
-            if debit.loc[idx].strip() == "" or credit.loc[idx].strip() == "":
-                findings.append({"Nhóm kiểm tra": "Thiếu tài khoản đối ứng", "Ngày": dates.loc[idx], "Dòng dữ liệu": idx + 2,
-                                 "Giá trị": amounts.loc[idx], "Cảnh báo": "Thiếu tài khoản Nợ hoặc Có"})
-            if debit.loc[idx].startswith("1111") and any(x in norm_text(desc.loc[idx]) for x in ["hóa đơn", "mua hàng", "dịch vụ"]):
-                findings.append({"Nhóm kiểm tra": "Rà soát thanh toán tiền mặt", "Ngày": dates.loc[idx], "Dòng dữ liệu": idx + 2,
-                                 "Giá trị": amounts.loc[idx], "Cảnh báo": "Kiểm tra điều kiện thanh toán không dùng tiền mặt"})
-    if invoice_register is not None and not invoice_register.empty:
-        vat_col = find_column(invoice_register.columns, ["Tiền thuế", "Thuế GTGT", "VAT", "TgTThue"])
-        if vat_col:
-            journal_vat = amounts[debit.str.startswith("1331")].sum()
-            invoice_vat = invoice_register[vat_col].map(money).sum()
-            if abs(journal_vat - invoice_vat) > 1:
-                findings.append({"Nhóm kiểm tra": "Lệch thuế GTGT", "Ngày": "", "Dòng dữ liệu": "",
-                                 "Giá trị": journal_vat - invoice_vat,
-                                 "Cảnh báo": f"TK 1331 trên nhật ký ({journal_vat:,.0f}) khác bảng kê ({invoice_vat:,.0f})"})
-    return pd.DataFrame(findings)
-
-# ----------------------------- FR-04 receivables and reminders -----------------------------
-def aging_and_messages(invoices, today=None):
-    today = today or date.today()
-    df = invoices.copy()
-    due_col = find_column(df.columns, ["Ngày đến hạn", "Hạn thanh toán", "Due date"])
-    amount_col = find_column(df.columns, ["Số tiền phải thu", "Còn phải thu", "Số tiền", "Amount"])
-    name_col = find_column(df.columns, ["Tên khách hàng", "Tên nhà cung cấp", "Đối tác", "Khách hàng"])
-    number_col = find_column(df.columns, ["Số hóa đơn", "Mã đơn hàng", "Số chứng từ"])
-    if not due_col:
-        raise ValueError("Cần cột Ngày đến hạn để tính tuổi nợ.")
-    df["Ngày đến hạn chuẩn"] = pd.to_datetime(df[due_col], errors="coerce", dayfirst=True)
-    df["Số tiền chuẩn"] = df[amount_col].map(money) if amount_col else 0
-    df["Đối tác"] = df[name_col].astype(str) if name_col else "Quý khách"
-    df["Số hóa đơn chuẩn"] = df[number_col].astype(str) if number_col else ""
-    df["Số ngày quá hạn"] = (pd.Timestamp(today) - df["Ngày đến hạn chuẩn"]).dt.days
-    def priority(days):
-        if pd.isna(days): return "Chưa có hạn"
-        if -3 <= days <= 0: return "Sắp đến hạn"
-        if days > 15: return "Quá hạn nghiêm trọng"
-        if days > 0: return "Quá hạn nhẹ"
-        return "Chưa đến hạn"
-    df["Mức độ"] = df["Số ngày quá hạn"].map(priority)
-    def message(row, kind):
-        partner, amount, invno = row["Đối tác"], f"{row['Số tiền chuẩn']:,.0f} VNĐ", row["Số hóa đơn chuẩn"]
-        if kind == "customer":
-            return f"Kính gửi {partner}, bên em xin phép nhắc khoản công nợ {amount} liên quan hóa đơn/đơn hàng {invno}. Anh/chị vui lòng kiểm tra và hỗ trợ thanh toán theo thỏa thuận. Cảm ơn anh/chị."
-        if kind == "supplier":
-            return f"Chào {partner}, bên em đã thanh toán {amount} ngày {row['Ngày đến hạn chuẩn']:%d/%m/%Y} (nếu ngày chưa chính xác, vui lòng kiểm tra lại). Nhờ anh/chị gửi bổ sung hóa đơn/chứng từ cho khoản này. Cảm ơn anh/chị."
-        return f"Chào bạn, khoản tạm ứng {amount} liên quan {invno} đang cần hoàn ứng/nộp chứng từ. Vui lòng bổ sung hồ sơ để kế toán hoàn tất đối chiếu."
-    df["Tin nhắn nhắc khách"] = df.apply(lambda r: message(r, "customer"), axis=1)
-    df["Tin nhắn đòi hóa đơn"] = df.apply(lambda r: message(r, "supplier"), axis=1)
-    df["Tin nhắn hoàn ứng"] = df.apply(lambda r: message(r, "staff"), axis=1)
-    return df
-
-# ----------------------------- UI -----------------------------
-check_session_ttl()
-st.title("🧾 Trợ lý Kế toán SME")
-st.caption("Trợ lý xử lý đối soát, chứng từ và dòng tiền — dữ liệu nghiệp vụ chỉ làm việc trong phiên hiện tại.")
-with st.sidebar:
-    st.subheader("Không gian làm việc")
-    st.info("Chế độ MVP: chưa lưu dữ liệu kế toán lên máy chủ.")
-    st.caption("Phiên tự xóa sau 10 phút không hoạt động.")
-    if st.button("🧹 Xóa toàn bộ dữ liệu phiên", use_container_width=True):
-        clear_session_data()
+@st.fragment(run_every="30s")
+def inactivity_guard():
+    last = st.session_state.get("_last_activity",time.time())
+    if time.time()-last > TTL_SECONDS:
+        clear_data()
+        st.session_state["_last_activity"] = time.time()
+        st.session_state["_session_expired"] = True
         st.rerun()
 
-pages = st.tabs(["Tổng quan", "01 · Đối soát ngân hàng", "02 · Kiểm soát hóa đơn", "03 · Xuất dữ liệu", "04 · Tuổi nợ", "05 · Pre-audit", "06 · Báo cáo", "07 · Cố vấn thuế", "08 · Gói dịch vụ"])
+inactivity_guard()
+if st.session_state.pop("_session_expired",False):
+    st.toast("Phiên đã hết hạn do không hoạt động; tệp và dữ liệu tạm đã được xóa.",icon="🧹")
 
-with pages[0]:
+def get_setting(name, default=""):
+    value = os.getenv(name)
+    if value:
+        return value
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+def read_upload(file, aliases=()):
+    return read_tabular_bytes(file.name, file.getvalue(), aliases) if file else None
+
+
+def download_sample_excel(label, module, key, sheet=None):
+    sheets = sample_workbook(module)
+    if sheet:
+        sheets = {sheet: sheets[sheet]}
+    st.download_button(label, data=excel_bytes(sheets),
+        file_name=f"Du_lieu_mau_{module.upper()}_{(sheet or 'ALL').replace(' ','_')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key, use_container_width=True,
+        on_click=clear_data if st.session_state.get("clear_after_download", True) else None)
+
+def download_sample_bytes(label, data, filename, mime, key):
+    st.download_button(label, data=data, file_name=filename, mime=mime,
+        key=key, use_container_width=True,
+        on_click=clear_data if st.session_state.get("clear_after_download", True) else None)
+
+def export(label, sheets, filename, key):
+    premium = bool(st.session_state.get("active_subscription"))
+    limited = {name: frame if premium else frame.head(50) for name,frame in sheets.items()}
+    st.download_button(label, data=excel_bytes(limited), file_name=filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key, use_container_width=True,
+        on_click=clear_data if st.session_state.get("clear_after_download", True) else None)
+    if not premium:
+        st.caption("Tài khoản khách: file tải xuống giới hạn 50 dòng đầu mỗi sheet; thống kê trên màn hình vẫn tính toàn bộ dữ liệu.")
+
+def export_bytes(label, data, filename, key):
+    st.download_button(label, data=data, file_name=filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key, use_container_width=True,
+        on_click=clear_data if st.session_state.get("clear_after_download", True) else None)
+
+@st.fragment(run_every="3s")
+def payment_status_widget(client, payment_code):
+    try:
+        rows = client.table("payments").select("status,paid_at,plan,amount,expires_at").eq("payment_code",payment_code).limit(1).execute().data
+        if not rows:
+            st.caption("Đang chờ trạng thái đơn thanh toán…")
+            return
+        row = rows[0]
+        if row["status"] == "paid":
+            st.success(f"Thanh toán thành công · Gói {PLAN_LABELS.get(row['plan'],row['plan'])} đã được kích hoạt.")
+            if st.session_state.get("payment_confirmed_for") != payment_code:
+                st.session_state["payment_confirmed_for"] = payment_code
+                st.rerun()
+        elif row["status"] == "expired":
+            st.warning("Đơn thanh toán đã hết hạn. Hãy tạo đơn mới.")
+        elif row.get("expires_at") and pd.to_datetime(row["expires_at"],utc=True) <= pd.Timestamp.now(tz="UTC"):
+            st.warning("Đơn đã hết thời gian hiệu lực; cron worker sẽ cập nhật trạng thái hết hạn. Hãy tạo đơn mới.")
+        elif row["status"] == "rejected":
+            st.error("Giao dịch chưa được xác nhận do sai số tiền hoặc thông tin đơn.")
+        else:
+            st.info("Đang chờ ngân hàng xác nhận thanh toán. Trạng thái tự cập nhật mỗi 3 giây.")
+    except Exception as exc:
+        st.caption(f"Chưa đọc được trạng thái thanh toán: {exc}")
+
+client = get_public_client()
+admin_client = get_admin_client()
+current_user = restore_session(client) if client else None
+if "legal_documents" not in st.session_state:
+    try:
+        st.session_state["legal_documents"] = load_published_legal_documents(admin_client) if admin_client else []
+    except Exception:
+        st.session_state["legal_documents"] = []
+subscription = None
+if client and current_user:
+    try:
+        subscription = current_subscription(client)
+    except Exception as exc:
+        st.session_state["subscription_error"] = str(exc)
+st.session_state["active_subscription"] = subscription if subscription and subscription.get("expires_at") else None
+
+st.title("🧾 Trợ lý Kế toán SME")
+st.caption("Đối soát ngân hàng · Kiểm soát chứng từ · Quản trị dòng tiền")
+if client is None:
+    st.info("Chế độ dùng thử đang mở. Đăng nhập và thanh toán sẽ hoạt động sau khi cấu hình Supabase.")
+elif current_user:
+    plan = PLAN_LABELS.get(subscription.get("plan"), "Khách dùng thử") if subscription else "Khách dùng thử"
+    st.success(f"Đang đăng nhập: {current_user.email or current_user.id} · {plan}")
+else:
+    st.info("Bạn đang dùng chế độ khách. Có thể xử lý dữ liệu thử và tải tối đa 50 dòng mỗi sheet.")
+
+with st.sidebar:
+    st.markdown("### Không gian làm việc")
+    st.info("Tệp kế toán chỉ xử lý tạm trong bộ nhớ phiên; không ghi sổ kế toán vào database.")
+    st.caption("Phiên tạm tự kiểm tra timeout sau 10 phút không hoạt động.")
+    st.checkbox("Tự xóa file và dữ liệu tạm sau khi tải xuống",value=True,key="clear_after_download")
+    if st.button("🧹 Xóa dữ liệu nghiệp vụ", use_container_width=True):
+        clear_data()
+        st.rerun()
+
+tabs = st.tabs(["Tổng quan","01 · Đối soát","02 · Hóa đơn","03 · Xuất dữ liệu","04 · Tuổi nợ","05 · Pre-audit","06 · Báo cáo","07 · Cố vấn thuế","08 · Tài khoản & gói", "09 · AI Chứng từ & Đối chiếu"])
+
+with tabs[0]:
     st.subheader("Trung tâm nghiệp vụ kế toán")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Phân hệ", "08")
-    c2.metric("Lưu trữ sổ sách", "Không")
-    c3.metric("Tự xóa phiên", "10 phút")
+    a,b,c,d = st.columns(4)
+    a.metric("Phân hệ","08"); b.metric("Định dạng","XLSX · CSV · XML · ZIP"); c.metric("Lưu sổ sách","Không"); d.metric("Timeout phiên","10 phút")
     st.markdown("""
-    **Quy trình khuyến nghị**
-    1. Tải sao kê ngân hàng và bảng công nợ tại **Đối soát ngân hàng**.
-    2. Kiểm tra hóa đơn XML và khoản chi đang nợ chứng từ.
-    3. Sinh file quản trị nội bộ và file dữ liệu kế toán để kế toán rà soát.
-    4. Chạy kiểm toán nhanh trước kỳ thuế và tạo báo cáo dòng tiền.
-    
-    > Các kết quả ghép nối và định khoản là gợi ý hỗ trợ. Kế toán cần kiểm tra chứng từ gốc trước khi ghi sổ hoặc kê khai thuế.
-    """)
-    st.download_button("Tải bộ file Excel mẫu", data=to_excel_bytes({
-        "Sao_ke": pd.DataFrame([{"Ngày giao dịch":"01/11/2026","Số tiền ghi Có":1500000,"Số tiền ghi Nợ":0,"Nội dung giao dịch":"KH THANH TOAN HD HD001"}]),
-        "Cong_no": pd.DataFrame([{"Mã khách hàng":"KH01","Tên khách hàng":"Công ty ABC","Số hóa đơn":"HD001","Ngày hóa đơn":"01/10/2026","Số tiền phải thu":1500000,"Ngày đến hạn":"15/10/2026"}]),
-        "Nhat_ky": pd.DataFrame([{"Ngày hạch toán":"01/11/2026","Tài khoản Nợ":"1121","Tài khoản Có":"131","Số tiền":1500000,"Diễn giải":"Thu tiền khách hàng"}])
-    }), file_name="Bo_file_mau_TroLyKeToan.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    **Quy trình:** Đối soát sao kê → kiểm soát hóa đơn và nợ chứng từ → chuẩn hóa và xuất dữ liệu → theo dõi tuổi nợ → pre-audit → báo cáo quản trị.
 
-with pages[1]:
+    **Lưu ý:** kết quả tự động là gợi ý. Kế toán phải kiểm tra chứng từ gốc, chế độ kế toán áp dụng và căn cứ pháp lý trước khi ghi sổ/kê khai.
+    """)
+    sample = {
+        "Sao_ke":pd.DataFrame([{"Ngày giao dịch":"03/11/2026","Số tiền ghi Có":1500000,"Số tiền ghi Nợ":0,"Nội dung giao dịch":"CTY ABC thanh toan HD001"}]),
+        "Cong_no":pd.DataFrame([{"Mã khách hàng":"ABC","Tên khách hàng":"CTY ABC","Số hóa đơn":"HD001","Ngày hóa đơn":"01/10/2026","Số tiền phải thu":1500000,"Ngày đến hạn":"15/10/2026"}]),
+        "Nhat_ky":pd.DataFrame([{"Ngày hạch toán":"03/11/2026","Tài khoản Nợ":"1121","Tài khoản Có":"131","Số tiền":1500000,"Diễn giải":"Thu tiền khách hàng"}])
+    }
+    export("⬇ Tải bộ file mẫu dùng thử",sample,"Bo_file_mau_TroLyKeToan.xlsx","demo")
+    st.markdown("**Tài liệu tham khảo:**")
+    st.markdown("- [Hướng dẫn nhập khẩu Excel MISA SME 2026](https://helpsme.misa.vn/2026/kb/mot-so-cau-hoi-thuong-gap-lien-quan-den-ngan-hang-va-bao-cao-ngan-hang/)")
+    st.markdown("- [Cơ sở dữ liệu quốc gia về văn bản pháp luật](https://vbpl.moj.gov.vn/)")
+
+with tabs[1]:
     st.subheader("Đối soát sao kê ngân hàng & ghép hóa đơn trả gộp")
-    bank_file = st.file_uploader("1. Tải sao kê ngân hàng (Excel/CSV)", type=["xlsx","xls","csv"], key="bank")
-    invoice_file = st.file_uploader("2. Tải danh sách hóa đơn/công nợ chưa thu", type=["xlsx","xls","csv"], key="ar")
-    if st.button("Thực hiện đối soát", type="primary", disabled=not (bank_file and invoice_file)):
+    sample_cols = st.columns(2)
+    with sample_cols[0]: download_sample_excel("⬇ File mẫu sao kê", "fr01", "sample_fr01_bank", "Sao_ke")
+    with sample_cols[1]: download_sample_excel("⬇ File mẫu công nợ", "fr01", "sample_fr01_ar", "Cong_no")
+    left,right = st.columns(2)
+    bank = left.file_uploader("1. Sao kê ngân hàng",["xlsx","xls","csv"],key=upload_key("bank"))
+    ar = right.file_uploader("2. Danh sách công nợ phải thu",["xlsx","xls","csv"],key=upload_key("ar"))
+    threshold = st.slider("Ngưỡng khớp từ khóa đối tác",0.60,1.00,0.80,0.01)
+    epsilon = st.number_input("Sai số ghép hóa đơn (VNĐ)",0,100000,1000,100)
+    if st.button("🔎 Thực hiện đối soát",type="primary",disabled=not(bank and ar)):
         try:
-            bank = read_tabular(bank_file, ["Ngày giao dịch","Số tiền ghi Có","Nội dung giao dịch"])
-            invoices = read_tabular(invoice_file, ["Tên khách hàng","Số hóa đơn","Số tiền phải thu"])
-            result, unmatched = reconcile_bank(bank, invoices)
-            st.session_state["reconcile_result"] = result
-            st.session_state["unmatched_invoices"] = unmatched
+            bank_df = read_upload(bank,["Ngày giao dịch","Số tiền ghi Có","Nội dung giao dịch"])
+            ar_df = read_upload(ar,["Tên khách hàng","Số hóa đơn","Số tiền phải thu"])
+            matched,unmatched = reconcile_bank(bank_df,ar_df,threshold,int(epsilon))
+            st.session_state["data_reconcile"] = matched
+            st.session_state["data_unmatched_ar"] = unmatched
+            st.session_state["data_outgoing"] = build_staging(bank_df,"99")
+            st.success(f"Đã xử lý {len(matched)} giao dịch ghi Có và phân loại gợi ý các khoản ghi Nợ.")
         except Exception as exc:
             st.error(f"Không thể đối soát: {exc}")
-    result = st.session_state.get("reconcile_result")
+    result = st.session_state.get("data_reconcile")
     if result is not None:
+        a,b,c = st.columns(3)
+        a.metric("Khớp 1-1",int((result["Kết quả"]=="Khớp 1-1").sum()))
+        b.metric("Khớp trả gộp",int((result["Kết quả"]=="Khớp trả gộp (1-N)").sum()))
+        c.metric("Chưa xác định",int((result["Kết quả"]=="Chưa xác định").sum()))
         for label in ["Khớp 1-1","Khớp trả gộp (1-N)","Chưa xác định"]:
-            subset = result[result["Kết quả"] == label]
-            with st.expander(f"{label} · {len(subset)} giao dịch", expanded=(label=="Chưa xác định")):
-                st.dataframe(subset, use_container_width=True, hide_index=True)
-        st.download_button("Tải kết quả đối soát Excel", to_excel_bytes({"Ket_qua":result,"Hoa_don_chua_ghep":st.session_state["unmatched_invoices"]}),
-                           "Ket_qua_doi_soat.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            with st.expander(f"{label} · {int((result['Kết quả']==label).sum())}",expanded=label=="Chưa xác định"):
+                st.dataframe(result[result["Kết quả"]==label],use_container_width=True,hide_index=True)
+        st.markdown("**Hóa đơn còn chưa ghép**")
+        st.dataframe(st.session_state["data_unmatched_ar"],use_container_width=True,hide_index=True)
+        export("⬇ Tải kết quả đối soát",{"Ket_qua":result,"Hoa_don_chua_ghep":st.session_state["data_unmatched_ar"]},"Ket_qua_doi_soat.xlsx","reconcile_export")
+        outgoing = st.session_state.get("data_outgoing")
+        if outgoing is not None:
+            with st.expander("Gợi ý phân loại các khoản tiền ra"):
+                st.dataframe(outgoing[outgoing["Tiền chi"]>0],use_container_width=True,hide_index=True)
+                st.caption("Định khoản chỉ là gợi ý theo từ khóa; chưa tự xác định VAT hoặc đối tượng hạch toán.")
 
-with pages[2]:
-    st.subheader("Kiểm soát hóa đơn điện tử & nợ chứng từ")
-    company_tax = st.text_input("Mã số thuế doanh nghiệp")
-    company_name = st.text_input("Tên doanh nghiệp theo đăng ký")
-    xml_file = st.file_uploader("Tải hóa đơn XML hoặc ZIP chứa XML", type=["xml","zip"], key="xml")
-    payment_file = st.file_uploader("Tải nhật ký thanh toán (không bắt buộc)", type=["xlsx","xls","csv"], key="payments")
-    if st.button("Kiểm tra hóa đơn", type="primary", disabled=not xml_file):
+with tabs[2]:
+    st.subheader("Kiểm soát hóa đơn XML & nợ chứng từ")
+    sample_cols = st.columns(2)
+    with sample_cols[0]: download_sample_bytes("⬇ ZIP hóa đơn XML mẫu", sample_xml_zip(), "HoaDon_XML_Mau.zip", "application/zip", "sample_fr02_xml")
+    with sample_cols[1]: download_sample_excel("⬇ Nhật ký thanh toán mẫu", "fr02", "sample_fr02_payments", "Payment_Log")
+    st.caption("MST người mua trong XML mẫu: 0109999999 · Tên người mua: Cong ty khach hang mau. Chữ ký trong file là placeholder, không phải chữ ký số hợp lệ.")
+    tax = st.text_input("Mã số thuế doanh nghiệp",key="co_tax")
+    company = st.text_input("Tên doanh nghiệp theo đăng ký",key="co_name")
+    xml = st.file_uploader("Hóa đơn XML hoặc ZIP chứa nhiều XML",["xml","zip"],key=upload_key("xml"))
+    pay = st.file_uploader("Nhật ký thanh toán / sao kê tiền ra (không bắt buộc)",["xlsx","xls","csv"],key=upload_key("payments"))
+    if st.button("🧾 Kiểm tra hóa đơn và nợ chứng từ",type="primary",disabled=not xml):
         try:
-            parsed = parse_xml_upload(xml_file, company_tax, company_name)
-            st.session_state["parsed_invoices"] = parsed
-            if payment_file:
-                payments = read_tabular(payment_file, ["Số tiền","Ngày thanh toán","Nội dung"])
-                p_amount, pcol = money_column(payments, ["Số tiền","Số tiền ghi Nợ","Amount"])
-                p_desc = find_column(payments.columns, ["Nội dung","Diễn giải","Nhà cung cấp"])
-                inv_total = pd.to_numeric(parsed.get("total", pd.Series(dtype=float)), errors="coerce")
-                inv_names = parsed.get("seller_name", pd.Series([""]*len(parsed))).astype(str)
-                parsed["Trạng thái đối chiếu"] = "Hóa đơn treo"
-                for i, invrow in parsed.iterrows():
-                    hit = (p_amount - invrow.get("total", 0)).abs() <= EPSILON_VND
-                    if p_desc and invrow.get("seller_name"):
-                        hit = hit & payments[p_desc].astype(str).map(lambda x: similarity(x, invrow.get("seller_name")) >= 0.80)
-                    if hit.any():
-                        parsed.at[i, "Trạng thái đối chiếu"] = "Đủ chứng từ"
-                st.session_state["parsed_invoices"] = parsed
+            invoices = parse_invoice_upload(xml.name,xml.getvalue(),tax,company)
+            if pay:
+                payment_df = read_upload(pay,["Số tiền ghi Nợ","Nội dung","Ngày giao dịch"])
+                invoice_status,missing = reconcile_payables(invoices,payment_df)
+                st.session_state["data_invoices"] = invoice_status
+                st.session_state["data_missing_docs"] = missing
+            else:
+                st.session_state["data_invoices"] = invoices
+                st.session_state["data_missing_docs"] = pd.DataFrame()
+            st.success(f"Đã đọc {len(invoices)} hóa đơn.")
         except Exception as exc:
-            st.error(f"Lỗi xử lý hóa đơn: {exc}")
-    parsed = st.session_state.get("parsed_invoices")
-    if parsed is not None:
-        st.dataframe(parsed, use_container_width=True, hide_index=True)
-        st.download_button("Tải danh sách kiểm tra hóa đơn", to_excel_bytes({"Hoa_don":parsed}), "Kiem_tra_hoa_don.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    st.caption("Bộ đọc XML kiểm tra các trường có thể nhận diện theo cấu trúc file cung cấp; kết quả không thay thế việc xác minh chữ ký số bằng công cụ chuyên dụng.")
+            st.error(f"Không thể kiểm tra hóa đơn: {exc}")
+    invoices = st.session_state.get("data_invoices")
+    if invoices is not None:
+        st.markdown("**Danh sách hóa đơn và trạng thái chứng từ**")
+        m1,m2,m3 = st.columns(3)
+        m1.metric("Đủ chứng từ",int((invoices["Trạng thái chứng từ"]=="Đủ chứng từ").sum()) if "Trạng thái chứng từ" in invoices else 0)
+        m2.metric("Thanh toán một phần",int((invoices["Trạng thái chứng từ"]=="Thanh toán một phần").sum()) if "Trạng thái chứng từ" in invoices else 0)
+        m3.metric("Hóa đơn treo",int((invoices["Trạng thái chứng từ"]=="Hóa đơn treo").sum()) if "Trạng thái chứng từ" in invoices else 0)
+        st.dataframe(invoices,use_container_width=True,hide_index=True)
+        missing = st.session_state.get("data_missing_docs",pd.DataFrame())
+        if not missing.empty:
+            st.warning(f"Có {len(missing)} khoản chi chưa ghép được hóa đơn – cần rà soát nợ chứng từ.")
+            st.dataframe(missing,use_container_width=True,hide_index=True)
+        export("⬇ Tải báo cáo hóa đơn và nợ chứng từ",{"Hoa_don":invoices,"No_chung_tu":missing},"Bao_cao_hoa_don_no_chung_tu.xlsx","invoice_export")
+    st.warning("Parser kiểm tra trường dữ liệu và dấu hiệu có cấu trúc chữ ký; chưa xác thực mật mã chữ ký số hoặc tra cứu trạng thái hóa đơn tại cơ quan Thuế.")
 
-with pages[3]:
-    st.subheader("Nhập một lần – xuất nhiều định dạng")
-    source_file = st.file_uploader("Tải nhật ký thu-chi đã đối soát hoặc file giao dịch", type=["xlsx","xls","csv"], key="staging")
-    standard = st.selectbox("Chế độ hạch toán", ["Thông tư 133","Thông tư 200"])
-    if source_file:
+with tabs[3]:
+    st.subheader("Nhập một lần – xuất đa đích")
+    download_sample_excel("⬇ File mẫu dữ liệu trung gian", "fr03", "sample_fr03_staging", "Du_lieu_giao_dich")
+    source = st.file_uploader("Tải nhật ký thu-chi / dữ liệu đã đối soát",["xlsx","xls","csv"],key=upload_key("staging_file"))
+    standard = st.selectbox("Chế độ kế toán tham chiếu",["99","133","200-transition"],
+        format_func=lambda x:{"99":"Thông tư 99/2025/TT-BTC (năm tài chính bắt đầu từ 2026)","133":"Thông tư 133/2016/TT-BTC (DN nhỏ và vừa đủ điều kiện)","200-transition":"TT200 – chỉ kỳ tài chính chuyển tiếp phù hợp"}[x])
+    if st.button("Chuẩn hóa dữ liệu",disabled=not source):
         try:
-            source = read_tabular(source_file, ["Ngày","Ngày giao dịch","Số tiền","Nội dung","Diễn giải"])
-            if st.button("Chuẩn hóa & gợi ý định khoản"):
-                staging = make_staging(source)
-                st.session_state["staging"] = staging
+            st.session_state["data_staging"] = build_staging(read_upload(source,["Ngày giao dịch","Tiền vào","Tiền ra","Nội dung"]),standard)
+            st.session_state.pop("data_exports",None)
         except Exception as exc:
             st.error(str(exc))
-    staging = st.session_state.get("staging")
+    staging = st.session_state.get("data_staging")
     if staging is not None:
-        edited = st.data_editor(staging, use_container_width=True, num_rows="dynamic", key="staging_editor")
-        st.session_state["staging"] = edited
-        st.caption("Đánh dấu 'Chưa đủ chứng từ' để loại dòng đó khỏi file import kế toán.")
-        if st.button("Tạo đồng thời 2 file Excel", type="primary"):
+        edited = st.data_editor(staging,use_container_width=True,num_rows="dynamic",key="staging_editor")
+        st.session_state["data_staging"] = edited
+        if st.button("📦 Tạo báo cáo nội bộ và dữ liệu trung gian",type="primary"):
             internal = edited.copy()
-            importable = edited[~edited["Chưa đủ chứng từ"].astype(bool)].copy()
-            st.session_state["exports"] = {
-                "internal": to_excel_bytes({"Bao_cao_thu_chi": internal}),
-                "import": to_excel_bytes({"Import_ke_toan": importable})
-            }
-        exports = st.session_state.get("exports")
+            importable = edited[~edited["Chưa đủ chứng từ"].fillna(False).astype(bool)].copy()
+            st.session_state["data_exports"] = {"internal":internal,"import":importable}
+        exports = st.session_state.get("data_exports")
         if exports:
-            c1,c2 = st.columns(2)
-            c1.download_button("Tải báo cáo quản trị nội bộ", exports["internal"], "Bao_Cao_Thu_Chi_Noi_Bo.xlsx")
-            c2.download_button("Tải file import kế toán", exports["import"], "Import_MISA_VACOM.xlsx")
+            a,b = st.columns(2)
+            with a:
+                st.metric("Dòng báo cáo nội bộ",len(exports["internal"]))
+                export("⬇ Báo cáo thu chi nội bộ",{"Bao_cao_thu_chi":exports["internal"]},"Bao_Cao_Thu_Chi_Noi_Bo.xlsx","internal_export")
+            with b:
+                st.metric("Dòng dữ liệu trung gian đủ chứng từ",len(exports["import"]))
+                export("⬇ Dữ liệu trung gian",{"Du_lieu_ke_toan":exports["import"]},"Du_Lieu_Trung_Gian.xlsx","staging_export")
+        st.divider()
+        st.markdown("**Tạo file theo mẫu import chính thức**")
+        st.caption("MISA yêu cầu từng loại chứng từ dùng một file mẫu riêng. Tải mẫu đúng loại chứng từ trong phần mềm, sau đó đưa vào đây để giữ nguyên tên cột và định dạng.")
+        target = st.selectbox("Loại chứng từ",["thu_tien_gui","chi_tien_gui","chuyen_tien_noi_bo"],format_func=lambda x:{"thu_tien_gui":"Thu tiền gửi","chi_tien_gui":"Chi tiền gửi","chuyen_tien_noi_bo":"Chuyển tiền nội bộ"}[x])
+        if target == "chuyen_tien_noi_bo":
+            st.caption("Trước khi xuất, sửa Loại chứng từ thành Chuyển tiền nội bộ và điền Tài khoản đi/Tài khoản đến trên từng dòng.")
+        template = st.file_uploader("Tải mẫu Excel import từ MISA/VACOM",["xlsx"],key=upload_key("accounting_template"))
+        default_prefix = {"thu_tien_gui":"PTG","chi_tien_gui":"PCG","chuyen_tien_noi_bo":"CTNB"}[target]
+        voucher_prefix = st.text_input("Tiền tố số chứng từ",value=default_prefix)
+        voucher_start = st.number_input("Số thứ tự chứng từ bắt đầu (kiểm tra để tránh trùng)",min_value=1,value=1,step=1)
+        if st.button("Ánh xạ dữ liệu vào file mẫu",disabled=not(template and voucher_prefix.strip())):
+            try:
+                rows_for_import = edited if st.session_state.get("active_subscription") else edited.head(50)
+                mapped,missing_fields = map_staging_to_template(rows_for_import,template.getvalue(),target,voucher_prefix,int(voucher_start))
+                st.session_state["result_mapped_template"] = mapped
+                st.session_state["result_template_generated_premium"] = bool(st.session_state.get("active_subscription"))
+                st.session_state["result_template_missing"] = missing_fields
+                st.success("Đã tạo file trên cấu trúc mẫu được tải lên.")
+            except Exception as exc:
+                st.error(str(exc))
+        if st.session_state.get("result_mapped_template") and not st.session_state.get("active_subscription") and st.session_state.get("result_template_generated_premium"):
+            st.session_state.pop("result_mapped_template",None)
+            st.session_state.pop("result_template_missing",None)
+            st.session_state.pop("result_template_generated_premium",None)
+        if st.session_state.get("result_mapped_template"):
+            if not st.session_state.get("active_subscription"):
+                st.caption("Gói khách: file import theo mẫu giới hạn 50 dòng đầu.")
+            if st.session_state.get("result_template_missing"):
+                st.warning("Một số cột mẫu chưa có dữ liệu ánh xạ: "+", ".join(st.session_state["result_template_missing"]))
+            export_bytes("⬇ Tải file đã ánh xạ theo mẫu",st.session_state["result_mapped_template"],f"Import_{target}.xlsx","mapped_template_export")
+    st.info("Không tự tuyên bố file trung gian tương thích 100% với mọi phiên bản. Với MISA SME 2026, mỗi loại chứng từ cần đúng file mẫu riêng; kế toán phải kiểm tra trước khi nhập khẩu.")
 
-with pages[4]:
+with tabs[4]:
     st.subheader("Quản trị tuổi nợ & tin nhắn nhắc việc")
-    aging_file = st.file_uploader("Tải danh sách công nợ có ngày đến hạn", type=["xlsx","xls","csv"], key="aging")
-    if aging_file:
+    download_sample_excel("⬇ File mẫu công nợ và ngày đến hạn", "fr04", "sample_fr04_aging", "Cong_no")
+    f = st.file_uploader("Danh sách công nợ có ngày đến hạn",["xlsx","xls","csv"],key=upload_key("aging_file"))
+    if st.button("Tính tuổi nợ",disabled=not f):
         try:
-            aging_source = read_tabular(aging_file, ["Ngày đến hạn","Tên khách hàng","Số tiền"])
-            aging = aging_and_messages(aging_source)
-            st.session_state["aging"] = aging
+            st.session_state["data_aging"] = aging_report(read_upload(f,["Ngày đến hạn","Tên khách hàng","Số tiền"]))
         except Exception as exc:
             st.error(str(exc))
-    aging = st.session_state.get("aging")
+    aging = st.session_state.get("data_aging")
     if aging is not None:
-        st.dataframe(aging[["Đối tác","Số hóa đơn chuẩn","Số tiền chuẩn","Ngày đến hạn chuẩn","Số ngày quá hạn","Mức độ"]], use_container_width=True, hide_index=True)
-        for i, row in aging.iterrows():
-            with st.expander(f"{row['Đối tác']} · {row['Mức độ']} · {row['Số tiền chuẩn']:,.0f} VNĐ"):
-                st.text_area("Tin nhắn Zalo nhắc công nợ", row["Tin nhắn nhắc khách"], key=f"msg_{i}")
-                st.text_area("Tin nhắn yêu cầu hóa đơn", row["Tin nhắn đòi hóa đơn"], key=f"invmsg_{i}")
-                st.text_area("Tin nhắn nhắc hoàn ứng", row["Tin nhắn hoàn ứng"], key=f"staffmsg_{i}")
-        st.download_button("Tải báo cáo tuổi nợ", to_excel_bytes({"Tuoi_no":aging}), "Bao_cao_tuoi_no.xlsx")
+        counts = aging["Mức độ"].value_counts()
+        cols = st.columns(4)
+        for col,label in zip(cols,["Sắp đến hạn","Quá hạn nhẹ","Quá hạn nghiêm trọng","Chưa đến hạn"]):
+            col.metric(label,int(counts.get(label,0)))
+        st.dataframe(aging[["Đối tác","Số hóa đơn","Số tiền","Ngày đến hạn chuẩn","Số ngày quá hạn","Mức độ"]],use_container_width=True,hide_index=True)
+        for i,row in aging.iterrows():
+            with st.expander(f"{row['Đối tác']} · {row['Mức độ']} · {row['Số tiền']:,.0f} VNĐ"):
+                st.text_area("Tin nhắn nhắc khách trả công nợ",row["Tin nhắn nhắc công nợ"],key=f"ar_{i}")
+                st.text_area("Tin nhắn yêu cầu nhà cung cấp gửi hóa đơn",row["Tin nhắn yêu cầu hóa đơn"],key=f"ap_{i}")
+                st.text_area("Tin nhắn nhắc nhân viên hoàn ứng",row["Tin nhắn nhắc hoàn ứng"],key=f"staff_{i}")
+        export("⬇ Tải báo cáo tuổi nợ",{"Tuoi_no":aging},"Bao_cao_tuoi_no.xlsx","aging_export")
 
-with pages[5]:
-    st.subheader("Kiểm toán nhanh trước kỳ thuế")
-    journal_file = st.file_uploader("Tải Sổ Nhật ký chung", type=["xlsx","xls","csv"], key="journal")
-    tax_file = st.file_uploader("Tải bảng kê hóa đơn mua vào (không bắt buộc)", type=["xlsx","xls","csv"], key="taxreg")
-    if st.button("Chạy kiểm tra", type="primary", disabled=not journal_file):
+with tabs[5]:
+    st.subheader("Kiểm toán nhanh trước kỳ thuế – Pre-audit")
+    sample_cols = st.columns(3)
+    with sample_cols[0]: download_sample_excel("⬇ Nhật ký chung mẫu", "fr05", "sample_fr05_journal", "Nhat_ky_chung")
+    with sample_cols[1]: download_sample_excel("⬇ Bảng cân đối mẫu", "fr05", "sample_fr05_tb", "Trial_Balance")
+    with sample_cols[2]: download_sample_excel("⬇ Bảng kê VAT mẫu", "fr05", "sample_fr05_vat", "Bang_ke_VAT")
+    journal = st.file_uploader("Sổ Nhật ký chung",["xlsx","xls","csv"],key=upload_key("journal"))
+    tb = st.file_uploader("Bảng cân đối phát sinh / Trial Balance",["xlsx","xls","csv"],key=upload_key("trial_balance"))
+    register = st.file_uploader("Bảng kê hóa đơn mua vào/bán ra",["xlsx","xls","csv"],key=upload_key("register"))
+    opening = st.number_input("Số dư đầu kỳ TK 1111 (VNĐ)",min_value=0.0,step=100000.0)
+    cash_threshold = st.number_input("Ngưỡng rà soát thanh toán tiền mặt (VNĐ; 0 = không chạy)",min_value=0,value=0,step=1000000)
+    period_end = st.date_input("Ngày kết thúc kỳ kiểm tra",value=date.today())
+    if st.button("🩺 Chạy 6 nhóm kiểm tra",type="primary",disabled=not journal):
         try:
-            journal = read_tabular(journal_file, ["Ngày hạch toán","Tài khoản Nợ","Tài khoản Có","Số tiền"])
-            register = read_tabular(tax_file, ["Tiền thuế","Thuế GTGT"]) if tax_file else None
-            findings = pre_audit(journal, register)
-            st.session_state["audit_findings"] = findings
+            j = read_upload(journal,["Ngày hạch toán","Tài khoản Nợ","Tài khoản Có","Số tiền"])
+            tb_df = read_upload(tb,["Tài khoản","Tổng phát sinh Nợ","Tổng phát sinh Có"]) if tb else None
+            reg = read_upload(register,["Tiền thuế","Thuế GTGT"]) if register else None
+            st.session_state["data_audit"] = advanced_pre_audit(j,tb_df,reg,opening,period_end,int(cash_threshold) if cash_threshold else None)
         except Exception as exc:
-            st.error(f"Không thể kiểm tra: {exc}")
-    findings = st.session_state.get("audit_findings")
-    if findings is not None:
-        if findings.empty:
+            st.error(str(exc))
+    audit = st.session_state.get("data_audit")
+    if audit is not None:
+        if audit.empty:
             st.success("Không phát hiện cảnh báo theo các quy tắc hiện có.")
         else:
-            st.warning(f"Phát hiện {len(findings)} điểm cần kế toán rà soát.")
-            st.dataframe(findings, use_container_width=True, hide_index=True)
-        st.download_button("Tải báo cáo Pre-audit", to_excel_bytes({"Canh_bao":findings}), "Bao_cao_Pre_Audit.xlsx")
+            st.warning(f"Có {len(audit)} dòng cảnh báo cần rà soát.")
+            st.dataframe(audit,use_container_width=True,hide_index=True)
+        export("⬇ Tải báo cáo Pre-audit",{"Canh_bao":audit},"Bao_cao_Pre_Audit.xlsx","audit_export")
+    st.caption("Các quy tắc là cảnh báo sơ bộ, không tự kết luận vi phạm thuế. Ngưỡng/điều kiện thanh toán không dùng tiền mặt phải xét theo văn bản, kỳ và loại thuế áp dụng.")
 
-with pages[6]:
+with tabs[6]:
     st.subheader("Báo cáo quản trị nhanh cho Giám đốc")
-    report_file = st.file_uploader("Tải dữ liệu thu-chi trong ngày/tháng", type=["xlsx","xls","csv"], key="report")
-    opening = st.number_input("Số dư đầu kỳ (VNĐ)", min_value=0.0, step=100000.0)
-    if report_file:
+    sample_cols = st.columns(4)
+    with sample_cols[0]: download_sample_excel("⬇ Sao kê mẫu", "fr06", "sample_fr06_cash", "Sao_ke")
+    with sample_cols[1]: download_sample_excel("⬇ Sổ chi tiết mẫu", "fr06", "sample_fr06_gl", "So_chi_tiet")
+    with sample_cols[2]: download_sample_excel("⬇ Phải thu mẫu", "fr06", "sample_fr06_ar", "Phai_thu")
+    with sample_cols[3]: download_sample_excel("⬇ Phải trả mẫu", "fr06", "sample_fr06_ap", "Phai_tra")
+    cash_file = st.file_uploader("Sao kê thu-chi ngày/tháng",["xlsx","xls","csv"],key=upload_key("report_cash"))
+    opening = st.number_input("Số dư đầu kỳ tiền gửi/quỹ (VNĐ)",min_value=0.0,step=100000.0,key="report_opening")
+    if st.button("Tổng hợp dòng tiền",disabled=not cash_file):
         try:
-            df = read_tabular(report_file, ["Ngày giao dịch","Số tiền ghi Có","Số tiền ghi Nợ"])
-            inc, _ = money_column(df, ["Số tiền ghi Có","Tiền vào","Thu","Credit"])
-            out, _ = money_column(df, ["Số tiền ghi Nợ","Tiền ra","Chi","Debit"])
-            total_in, total_out = inc.sum(), out.sum()
-            closing = opening + total_in - total_out
-            a,b,c = st.columns(3)
-            a.metric("Tổng thu", f"{total_in:,.0f} đ")
-            b.metric("Tổng chi", f"{total_out:,.0f} đ")
-            c.metric("Tồn cuối kỳ", f"{closing:,.0f} đ")
-            report_text = f"📊 BÁO CÁO DÒNG TIỀN\n💰 Tồn đầu kỳ: {opening:,.0f} VNĐ\n📥 Tổng thu: {total_in:,.0f} VNĐ\n📤 Tổng chi: {total_out:,.0f} VNĐ\n🏦 Tồn cuối kỳ: {closing:,.0f} VNĐ\n\n_Báo cáo được tạo tự động bởi Trợ lý Kế toán SME._"
-            st.text_area("Nội dung gửi Zalo cho Giám đốc", report_text, height=180)
-            st.download_button("Tải báo cáo Excel", to_excel_bytes({"Tong_hop":pd.DataFrame([{"Tồn đầu kỳ":opening,"Tổng thu":total_in,"Tổng chi":total_out,"Tồn cuối kỳ":closing}])}),
-                               "Bao_cao_dong_tien.xlsx")
+            st.session_state["data_cashflow"] = cashflow_summary(read_upload(cash_file,["Số tiền ghi Có","Số tiền ghi Nợ","Tiền vào","Tiền ra"]),opening)
         except Exception as exc:
             st.error(str(exc))
+    summary = st.session_state.get("data_cashflow")
+    if summary:
+        a,b,c,d = st.columns(4)
+        a.metric("Tổng thu",f"{summary['Tổng thu']:,.0f} đ")
+        b.metric("Tổng chi",f"{summary['Tổng chi']:,.0f} đ")
+        c.metric("Dòng tiền thuần",f"{summary['Dòng tiền thuần']:,.0f} đ")
+        d.metric("Tồn cuối kỳ",f"{summary['Tồn cuối kỳ']:,.0f} đ")
+        message = (f"📊 BÁO CÁO DÒNG TIỀN\n💰 Tồn đầu kỳ: {summary['Tồn đầu kỳ']:,.0f} VNĐ\n📥 Tổng thu: {summary['Tổng thu']:,.0f} VNĐ\n📤 Tổng chi: {summary['Tổng chi']:,.0f} VNĐ\n📈 Dòng tiền thuần: {summary['Dòng tiền thuần']:,.0f} VNĐ\n🏦 Tồn cuối kỳ: {summary['Tồn cuối kỳ']:,.0f} VNĐ")
+        st.text_area("Nội dung gửi Zalo cho Giám đốc",message,height=170)
+        export("⬇ Tải báo cáo dòng tiền",{"Tong_hop":pd.DataFrame([summary])},"Bao_cao_dong_tien.xlsx","cashflow_export")
+    st.divider()
+    st.markdown("**Báo cáo lãi lỗ tháng (P&L ước tính)**")
+    gl = st.file_uploader("Sổ chi tiết / Nhật ký chung có ngày, tài khoản Nợ, Có và số tiền",["xlsx","xls","csv"],key=upload_key("pnl_gl"))
+    pnl_start = st.date_input("Từ ngày",value=date.today().replace(day=1),key="pnl_start")
+    pnl_end = st.date_input("Đến ngày",value=date.today(),key="pnl_end")
+    ar_file = st.file_uploader("Bảng công nợ phải thu (không bắt buộc)",["xlsx","xls","csv"],key=upload_key("pnl_ar"))
+    ap_file = st.file_uploader("Bảng công nợ phải trả (không bắt buộc)",["xlsx","xls","csv"],key=upload_key("pnl_ap"))
+    if st.button("Lập P&L và Top 5 công nợ",disabled=not gl):
+        try:
+            journal_df = read_upload(gl,["Tài khoản Nợ","Tài khoản Có","Số tiền"])
+            ar_df = read_upload(ar_file,["Tên khách hàng","Còn phải thu"]) if ar_file else None
+            ap_df = read_upload(ap_file,["Tên nhà cung cấp","Còn phải trả"]) if ap_file else None
+            st.session_state["data_pnl"] = build_executive_pnl(journal_df,ar_df,ap_df,pnl_start,pnl_end)
+        except Exception as exc:
+            st.error(str(exc))
+    pnl = st.session_state.get("data_pnl")
+    if pnl:
+        a,b,c = st.columns(3)
+        a.metric("Doanh thu thuần",f"{pnl['Doanh thu thuần']:,.0f} đ")
+        b.metric("Giá vốn",f"{pnl['Giá vốn']:,.0f} đ")
+        c.metric("Lợi nhuận ước tính",f"{pnl['Lợi nhuận ước tính']:,.0f} đ")
+        st.dataframe(pd.DataFrame([{"Chỉ tiêu":k,"Giá trị":v} for k,v in pnl.items() if isinstance(v,(int,float))]),use_container_width=True,hide_index=True)
+        left,right = st.columns(2)
+        with left:
+            st.markdown("**Top 5 phải thu**")
+            st.dataframe(pd.DataFrame(pnl["Top 5 phải thu"]),use_container_width=True,hide_index=True)
+        with right:
+            st.markdown("**Top 5 phải trả**")
+            st.dataframe(pd.DataFrame(pnl["Top 5 phải trả"]),use_container_width=True,hide_index=True)
+        st.caption(pnl["Ghi chú"])
+        export("⬇ Tải báo cáo P&L",{"P&L":pd.DataFrame([{"Chỉ tiêu":k,"Giá trị":v} for k,v in pnl.items() if isinstance(v,(int,float))]),"Top_phai_thu":pd.DataFrame(pnl["Top 5 phải thu"]),"Top_phai_tra":pd.DataFrame(pnl["Top 5 phải trả"])},"Bao_cao_PnL_Quan_Tri.xlsx","pnl_export")
 
-with pages[7]:
-    st.subheader("Cố vấn nghiệp vụ & pháp lý thuế")
-    st.warning("Chế độ hiện tại chưa kết nối kho văn bản pháp luật/RAG đã kiểm chứng. Không sử dụng câu trả lời tự sinh làm căn cứ kê khai hoặc quyết toán.")
-    question = st.text_area("Nhập câu hỏi nghiệp vụ kế toán/thuế")
-    st.text_input("Khóa API AI (chỉ dùng trong phiên, không lưu)", type="password", key="ai_key")
-    if st.button("Chuẩn bị câu hỏi tư vấn", disabled=not question.strip()):
-        masked = mask_sensitive(question)
-        st.code(masked)
-        st.info("Dữ liệu đã được che một số chuỗi định danh phổ biến. Chưa gửi tới AI vì cần cấu hình nhà cung cấp và kho văn bản pháp luật có phiên bản, ngày hiệu lực, nguồn trích dẫn.")
-    st.caption("Để hoàn thiện FR-07 cần nạp văn bản pháp luật chính thức, theo dõi hiệu lực và triển khai truy xuất đoạn văn có trích dẫn.")
+        if summary:
+            try:
+                pdf_data = management_report_pdf(summary,pnl)
+                download_sample_bytes("⬇ Tải Dashboard quản trị 1 trang (PDF)",pdf_data,
+                    "Dashboard_Quan_Tri_Dong_Tien.pdf","application/pdf","cashflow_pdf_export")
+            except Exception as exc:
+                st.warning(f"Chưa tạo được PDF dashboard: {exc}")
 
-with pages[8]:
-    st.subheader("Tài khoản & gói dịch vụ")
-    st.info("Đây là màn hình mô phỏng chính sách gói. Đăng nhập, xác thực người dùng và thanh toán VietQR/webhook chưa được kích hoạt.")
-    st.table(pd.DataFrame([
-        {"Gói":"Dùng thử","Giá":"0 VNĐ","Giới hạn":"50 dòng tải xuống"},
-        {"Gói":"Kế toán Nội bộ","Giá":"69.000 VNĐ/tháng","Giới hạn":"Không giới hạn dòng · 01 MST"},
-        {"Gói":"Kế toán Dịch vụ","Giá":"249.000 VNĐ/tháng","Giới hạn":"Không giới hạn dòng · nhiều MST"},
-    ]))
-    st.caption("Không nhập thông tin tài khoản ngân hàng hoặc thông tin thanh toán thật vào bản MVP này.")
+with tabs[7]:
+    st.subheader("Cố vấn nghiệp vụ & pháp lý thuế có kiểm chứng")
+    download_sample_bytes("⬇ Tải câu hỏi mẫu", sample_legal_questions(), "Cau_hoi_mau_co_van_thue.txt", "text/plain; charset=utf-8", "sample_fr07_questions")
+    st.warning("Chỉ tài liệu có metadata hiệu lực và được người quản trị xác nhận mới được tìm kiếm. Hệ thống không tự xác minh hiệu lực của file tải lên.")
+    st.caption("Câu hỏi được gửi tới Gemini API nếu đã cấu hình. Dù hệ thống tự che một số chuỗi định danh, hãy tự bỏ tên khách hàng, số hợp đồng, địa chỉ và dữ liệu mật. Free Tier có thể sử dụng nội dung gửi lên để cải thiện sản phẩm.")
+    legal_admin_ids = {x.strip() for x in get_setting("LEGAL_ADMIN_USER_IDS","").split(",") if x.strip()}
+    is_legal_admin = bool(current_user and current_user.id in legal_admin_ids)
+    if is_legal_admin:
+      with st.expander("Nạp văn bản pháp luật chính thức vào kho dùng chung"):
+        legal_file = st.file_uploader("PDF có text / DOCX / TXT / MD",["pdf","docx","txt","md"],key=upload_key("legal_file"))
+        number = st.text_input("Số hiệu văn bản",key="legal_number")
+        title = st.text_input("Tên văn bản",key="legal_title")
+        article = st.text_input("Điều/khoản (nếu biết)",key="legal_article")
+        effective_from = st.date_input("Ngày hiệu lực từ",value=date(2026,1,1),key="legal_from")
+        effective_to = st.date_input("Ngày hết hiệu lực (để trống nếu chưa xác định)",value=None,key="legal_to")
+        status = st.selectbox("Trạng thái do người quản trị xác nhận",["Chưa xác minh","Còn hiệu lực","Hết hiệu lực"])
+        source_url = st.text_input("URL nguồn chính thức")
+        if st.button("Xuất bản văn bản vào kho dùng chung",disabled=not(legal_file and number and title and source_url)):
+            if not admin_client:
+                st.error("Cần cấu hình SUPABASE_SECRET_KEY ở phía server và chạy schema.sql để lưu kho văn bản dùng chung.")
+            else:
+                try:
+                    metadata={"number":number,"title":title,"article":article,"effective_from":effective_from.isoformat(),"effective_to":effective_to.isoformat() if effective_to else None,"status":status,"source_url":source_url}
+                    publish_legal_document(admin_client,legal_file.name,legal_file.getvalue(),metadata,current_user.id)
+                    st.session_state["legal_documents"] = load_published_legal_documents(admin_client)
+                    st.success(f"Đã xuất bản {number} vào kho pháp lý dùng chung.")
+                except Exception as exc:
+                    st.error(f"Không xuất bản được văn bản: {exc}")
+    else:
+        st.info("Nạp văn bản vào kho chỉ dành cho tài khoản quản trị được cấu hình trong LEGAL_ADMIN_USER_IDS.")
+    docs = st.session_state.get("legal_documents",[])
+    legal_index = []
+    if docs:
+        try:
+            legal_index = build_legal_index(docs)
+            st.caption(f"Đã nạp {len(docs)} văn bản từ kho pháp lý dùng chung; {len(legal_index)} đoạn đủ điều kiện tìm kiếm theo metadata.")
+        except Exception as exc:
+            st.error(f"Không tạo được kho tra cứu: {exc}")
+    question = st.text_area("Câu hỏi nghiệp vụ kế toán/thuế",placeholder="Ví dụ: Hồ sơ cần có khi thanh toán chi phí vận chuyển?")
+    if st.button("Tra cứu căn cứ pháp lý",type="primary",disabled=not question.strip()):
+        masked_question = mask_sensitive(question)
+        matches = retrieve_legal_context(legal_index,masked_question,5)
+        st.session_state["result_legal_matches"] = matches
+        api_key = get_setting("GEMINI_API_KEY","")
+        if matches and api_key:
+            try:
+                st.session_state["result_legal_answer"] = answer_with_gemini(
+                    masked_question, matches, api_key, get_setting("GEMINI_MODEL","gemini-3.5-flash-lite")
+                )
+            except Exception as exc:
+                st.session_state["result_legal_answer"] = f"Không gọi được Gemini: {exc}. Chỉ hiển thị trích đoạn nguồn."
+        elif not matches:
+            st.session_state["result_legal_answer"] = "Không tìm thấy căn cứ phù hợp trong kho tài liệu đã nạp. Chưa thể kết luận."
+        else:
+            st.session_state["result_legal_answer"] = "Chưa cấu hình GEMINI_API_KEY. Chỉ hiển thị trích đoạn để người dùng tự đối chiếu, không tự tạo kết luận."
+    answer = st.session_state.get("result_legal_answer")
+    matches = st.session_state.get("result_legal_matches",[])
+    if answer:
+        st.markdown("**Kết quả tra cứu**")
+        st.write(answer)
+        if matches:
+            st.markdown("**Đoạn nguồn được truy xuất**")
+            for i,item in enumerate(matches,1):
+                with st.expander(f"[{i}] {item['number']} · {item['title']} · {item['chunk_id']}"):
+                    st.write(item["text"])
+                    st.caption(f"Hiệu lực từ {item['effective_from']} · Điểm tương đồng {item['score']:.3f}")
+                    st.link_button("Mở văn bản nguồn",item["source_url"])
+            checklist = make_checklist_xlsx(question,answer,matches)
+            export_bytes("⬇ Tải Phiếu Checklist Chứng từ / Căn cứ pháp lý",checklist,"Phieu_Checklist_Chung_Tu.xlsx","legal_checklist")
+    st.markdown("**Danh mục văn bản tham chiếu đã rà soát sơ bộ**")
+    st.markdown("- [Thông tư 99/2025/TT-BTC – hiệu lực từ 01/01/2026](https://vbpl.moj.gov.vn/bocongthuong/Pages/vbpq-van-ban-goc.aspx?ItemID=187356)")
+    st.markdown("- [Thông tư 133/2016/TT-BTC – chế độ kế toán doanh nghiệp nhỏ và vừa](https://vanban.chinhphu.vn/default.aspx?docid=186679&hiddenHeaderFooter=1&pageid=27160)")
+    st.markdown("- [Nghị định 254/2026/NĐ-CP – hóa đơn điện tử, hiệu lực từ 01/07/2026](https://vanban.chinhphu.vn/?docid=218689&pageid=27160&typegroupid=4)")
+    st.markdown("- [Luật Quản lý thuế 108/2025/QH15 – hiệu lực từ 01/07/2026](https://vanban.chinhphu.vn/?docid=216541&orggroupid=1&pageid=27160)")
+    st.markdown("- [Nghị định 252/2026/NĐ-CP – hướng dẫn Luật Quản lý thuế](https://vanban.chinhphu.vn/?docid=218690&orggroupid=2&pageid=27160)")
+    st.markdown("- [Thông tư 91/2026/TT-BTC – hướng dẫn hóa đơn điện tử](https://vanban.chinhphu.vn/?docid=219006&pageid=27160)")
+    st.markdown("- [Luật Thuế TNDN 67/2025/QH15](https://vanban.chinhphu.vn/?classid=1&docid=214607&pageid=27160&typ=)")
+    st.markdown("- [Luật 09/2026/QH16 – sửa đổi các luật thuế](https://vanban.chinhphu.vn/?docid=218095&pageid=27160&typegroupid=3)")
+
+with tabs[8]:
+    st.subheader("Tài khoản, gói cước & thanh toán VietQR")
+    download_sample_excel("⬇ Tải bảng mẫu gói dịch vụ và MST", "fr08", "sample_fr08_plans")
+    st.dataframe(pd.DataFrame([
+        {"Gói":"Khách vãng lai","Giá":"0 VNĐ","Quyền lợi":"Xem toàn bộ thống kê · tải tối đa 50 dòng đầu mỗi sheet"},
+        {"Gói":"Kế toán Nội bộ","Giá":"69.000 VNĐ/tháng","Quyền lợi":"Không giới hạn dòng · 01 MST"},
+        {"Gói":"Kế toán Dịch vụ","Giá":"249.000 VNĐ/tháng","Quyền lợi":"Không giới hạn dòng · nhiều MST"},
+    ]),hide_index=True,use_container_width=True)
+    if client is None:
+        st.warning("Chưa có SUPABASE_URL và SUPABASE_PUBLISHABLE_KEY. Tạo project Supabase, chạy supabase/schema.sql rồi cấu hình biến môi trường.")
+    elif current_user:
+        st.write(f"Tài khoản: **{current_user.email or current_user.id}**")
+        if subscription:
+            st.success(f"Gói đang hoạt động: {PLAN_LABELS.get(subscription['plan'],subscription['plan'])} · Hết hạn: {subscription['expires_at']}")
+            current_codes = subscription.get("tax_codes") or []
+            code_text = st.text_input("Mã số thuế được quản lý (phân tách bằng dấu phẩy)",value=", ".join(current_codes))
+            if st.button("Lưu danh sách mã số thuế"):
+                try:
+                    codes = [x.strip() for x in code_text.split(",") if x.strip()]
+                    updated = client.rpc("set_subscription_tax_codes",{"p_tax_codes":codes}).execute()
+                    st.success("Đã cập nhật danh sách mã số thuế.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Không cập nhật được mã số thuế: {exc}")
+        else:
+            st.info("Chưa có thuê bao trả phí đang hoạt động.")
+        if st.button("Đăng xuất"):
+            st.session_state.pop("auth_session",None)
+            st.session_state.pop("active_subscription",None)
+            st.rerun()
+        plan_choice = st.selectbox("Chọn gói muốn thanh toán",["internal","service"],format_func=lambda x:PLAN_LABELS[x])
+        if st.button("Tạo đơn VietQR"):
+            try:
+                order = client.rpc("create_payment_order",{"p_plan":plan_choice}).execute().data
+                order = order[0] if isinstance(order,list) else order
+                st.session_state["last_payment_order"] = order
+            except Exception as exc:
+                st.error(f"Không tạo được đơn thanh toán. Kiểm tra schema Supabase và quyền RPC: {exc}")
+        order = st.session_state.get("last_payment_order")
+        if order:
+            st.metric("Số tiền cần thanh toán",f"{int(order['amount']):,} VNĐ")
+            st.code(order["payment_code"])
+            bank = get_setting("PAYMENT_BANK","")
+            account = get_setting("PAYMENT_ACCOUNT","")
+            holder = get_setting("PAYMENT_ACCOUNT_HOLDER","")
+            require_sevqr = get_setting("PAYMENT_REQUIRE_SEVQR","false").lower()=="true"
+            if bank and account:
+                qr_url = build_sepay_qr_url(bank,account,int(order["amount"]),order["payment_code"],holder,require_sevqr)
+                st.image(qr_url,caption="Quét mã bằng ứng dụng ngân hàng. Giữ nguyên nội dung chuyển khoản.",width=280)
+                st.caption("Đơn hết hạn sau 30 phút. Khi webhook SePay xác nhận đúng mã và số tiền, hệ thống kích hoạt gói 30 ngày.")
+            else:
+                st.warning("Chưa cấu hình PAYMENT_BANK, PAYMENT_ACCOUNT và PAYMENT_ACCOUNT_HOLDER; chưa thể tạo QR thật.")
+            payment_status_widget(client,order["payment_code"])
+    else:
+        login_tab,signup_tab = st.tabs(["Đăng nhập","Tạo tài khoản"])
+        with login_tab:
+            with st.form("login_form"):
+                email = st.text_input("Email")
+                password = st.text_input("Mật khẩu",type="password")
+                submitted = st.form_submit_button("Đăng nhập")
+            if submitted:
+                try:
+                    response = sign_in(client,email,password)
+                    save_session(response.session)
+                    st.success("Đăng nhập thành công.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Không đăng nhập được: {exc}")
+        with signup_tab:
+            with st.form("signup_form"):
+                new_email = st.text_input("Email đăng ký")
+                new_password = st.text_input("Mật khẩu",type="password")
+                full_name = st.text_input("Họ tên")
+                submitted = st.form_submit_button("Tạo tài khoản")
+            if submitted:
+                try:
+                    response = client.auth.sign_up({"email":new_email,"password":new_password,"options":{"data":{"full_name":full_name}}})
+                    if response.session:
+                        save_session(response.session)
+                        st.success("Tạo tài khoản và đăng nhập thành công.")
+                        st.rerun()
+                    else:
+                        st.success("Đã gửi email xác thực. Vui lòng xác nhận email rồi đăng nhập.")
+                except Exception as exc:
+                    st.error(f"Không tạo được tài khoản: {exc}")
+    st.caption("Webhook thanh toán chạy độc lập bằng lệnh uvicorn billing_api:app. Không đưa Supabase Secret Key hoặc SePay API Key vào giao diện Streamlit.")
+
+
+
+with tabs[9]:
+    st.subheader("AI OCR chứng từ PDF/ảnh & mapping đối chiếu đa nguồn")
+    st.caption("Đọc hóa đơn, sao kê, ủy nhiệm chi và ảnh chụp nội dung chuyển tiền; chuẩn hóa dữ liệu rồi gợi ý ghép chứng từ.")
+    st.warning(
+        "Quyền riêng tư: khi chạy OCR, nội dung PDF/ảnh được gửi trực tiếp tới Google Gemini API. "
+        "Hệ thống gửi dữ liệu inline, không dùng Gemini Files API, không ghi file xuống ổ đĩa và không lưu chứng từ vào Supabase. "
+        "Lưu ý: Google công bố dữ liệu gửi bằng Free Tier có thể được dùng để cải thiện sản phẩm. "
+        "Không tải chứng từ mật/dữ liệu khách hàng thật lên Free Tier nếu chưa được tổ chức cho phép và rà soát điều khoản."
+    )
+    api_key = get_setting("GEMINI_API_KEY", "")
+    model_name = get_setting("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    if not api_key:
+        st.info("Chưa cấu hình GEMINI_API_KEY trong Streamlit Secrets. Có thể dùng phần đối chiếu Excel phía dưới; OCR AI sẽ mở khi có khóa Gemini API.")
+    st.caption(f"Mô hình OCR: {model_name} · Gửi dữ liệu inline · store=false")
+    consent = st.checkbox(
+        "Tôi xác nhận được phép gửi nội dung các tệp được chọn tới Google Gemini API để nhận diện chứng từ.",
+        value=False, key="ai_document_external_consent"
+    )
+    ai_files = st.file_uploader(
+        "1. Tải nhiều chứng từ PDF/ảnh (hóa đơn, sao kê, UNC, ảnh chuyển tiền)",
+        type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True,
+        key=upload_key("ai_documents")
+    )
+    bank_file = st.file_uploader(
+        "2. Bảng kê ngân hàng Excel/CSV (khuyến nghị nếu có dữ liệu điện tử)",
+        type=["xlsx", "xls", "csv"], key=upload_key("ai_bank_statement")
+    )
+    if st.button(
+        "🤖 Đọc chứng từ bằng AI",
+        type="primary", disabled=not (api_key and consent and ai_files)
+    ):
+        if len(ai_files) > 15:
+            st.error("Mỗi lượt tối đa 15 tệp. Hãy chia nhỏ lô chứng từ.")
+        else:
+            extracted = []
+            failures = []
+            with st.spinner("AI đang đọc chứng từ và trích xuất dữ liệu..."):
+                for uploaded in ai_files:
+                    try:
+                        extracted.append(extract_document(
+                            uploaded.name, uploaded.getvalue(), api_key, model_name
+                        ))
+                    except Exception as exc:
+                        failures.append(f"{uploaded.name}: {exc}")
+            inv_df, tx_df, summary_df = documents_to_dataframes(extracted)
+            if bank_file:
+                try:
+                    bank_df = read_upload(bank_file, [
+                        "Ngày giao dịch", "Ngày GD", "Ngày hạch toán", "Ngày hiệu lực",
+                        "Số tiền ghi Nợ", "Phát sinh Nợ", "PS Nợ", "Ghi Nợ",
+                        "Số tiền ghi Có", "Phát sinh Có", "PS Có", "Ghi Có",
+                        "Nội dung giao dịch", "Nội dung", "Diễn giải", "Mã GD", "Số tham chiếu"
+                    ])
+                    bank_tx = normalize_bank_statement(bank_df)
+                    if not bank_tx.empty:
+                        tx_df = pd.concat([tx_df, bank_tx], ignore_index=True)
+                except Exception as exc:
+                    failures.append(f"Bảng kê ngân hàng: {exc}")
+            st.session_state["ai_document_summary"] = summary_df
+            st.session_state["ai_invoice_records"] = inv_df
+            st.session_state["ai_transaction_records"] = tx_df
+            st.session_state["ai_document_failures"] = failures
+            for stale_key in ("ai_document_mapping", "ai_invoice_payment_result", "ai_transaction_payment_result"):
+                st.session_state.pop(stale_key, None)
+            st.success(f"Đã đọc thành công {len(extracted)}/{len(ai_files)} tệp.")
+    failures = st.session_state.get("ai_document_failures", [])
+    for failure in failures:
+        st.warning(failure)
+    summary_df = st.session_state.get("ai_document_summary")
+    inv_df = st.session_state.get("ai_invoice_records")
+    tx_df = st.session_state.get("ai_transaction_records")
+    if summary_df is not None:
+        st.markdown("**Kết quả nhận diện từng tệp**")
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        if inv_df is not None and not inv_df.empty:
+            st.markdown("**Hóa đơn trích xuất – kiểm tra/sửa trước khi mapping**")
+            inv_edited = st.data_editor(inv_df, use_container_width=True, hide_index=True, key="ai_invoice_editor")
+            st.session_state["ai_invoice_records"] = inv_edited
+        if tx_df is not None and not tx_df.empty:
+            st.markdown("**Giao dịch thanh toán trích xuất – kiểm tra/sửa trước khi mapping**")
+            tx_edited = st.data_editor(tx_df, use_container_width=True, hide_index=True, key="ai_transaction_editor")
+            st.session_state["ai_transaction_records"] = tx_edited
+        st.caption("Các trường có độ tin cậy thấp hoặc bằng chứng OCR không rõ phải được kiểm tra trên chứng từ gốc. AI không tự xác nhận tính hợp lệ pháp lý/chữ ký số.")
+        if inv_df is not None and not inv_df.empty and tx_df is not None and not tx_df.empty:
+            if st.button("🔗 Mapping hóa đơn với sao kê/UNC", key="ai_run_mapping"):
+                try:
+                    invoice_result, mapping_result, transaction_result = map_invoice_payments(
+                        st.session_state["ai_invoice_records"],
+                        st.session_state["ai_transaction_records"]
+                    )
+                    if not mapping_result.empty:
+                        mapping_result["Kế toán xác nhận"] = False
+                    st.session_state["ai_invoice_payment_result"] = invoice_result
+                    st.session_state["ai_document_mapping"] = mapping_result
+                    st.session_state["ai_transaction_payment_result"] = transaction_result
+                    st.success("Đã tạo gợi ý mapping. Chưa ghi sổ và chưa xác nhận thanh toán.")
+                except Exception as exc:
+                    st.error(f"Không mapping được: {exc}")
+    invoice_payment_result = st.session_state.get("ai_invoice_payment_result")
+    mapping_result = st.session_state.get("ai_document_mapping")
+    transaction_payment_result = st.session_state.get("ai_transaction_payment_result")
+    if invoice_payment_result is not None:
+        st.markdown("**Tình trạng thanh toán theo hóa đơn**")
+        st.dataframe(invoice_payment_result, use_container_width=True, hide_index=True)
+    if mapping_result is not None:
+        if mapping_result.empty:
+            st.info("Chưa tìm thấy giao dịch đủ căn cứ để mapping tự động.")
+        else:
+            st.markdown("**Các cặp mapping đề xuất – kế toán xác nhận thủ công**")
+            reviewed = st.data_editor(
+                mapping_result, use_container_width=True, hide_index=True,
+                key="ai_mapping_editor",
+                column_config={"Kế toán xác nhận": st.column_config.CheckboxColumn(
+                    "Kế toán xác nhận", help="Chỉ đánh dấu sau khi đã soát chứng từ gốc."
+                )}
+            )
+            if st.button("✓ Ghi nhận xác nhận trong phiên", key="ai_confirm_mapping"):
+                reviewed.loc[reviewed["Kế toán xác nhận"].fillna(False), "Trạng thái"] = "Đã xác nhận bởi kế toán"
+                st.session_state["ai_document_mapping"] = reviewed
+                st.success("Đã ghi nhận xác nhận trong phiên hiện tại; chưa ghi dữ liệu vào sổ kế toán.")
+    if transaction_payment_result is not None:
+        with st.expander("Chi tiết phân bổ từng giao dịch"):
+            st.dataframe(transaction_payment_result, use_container_width=True, hide_index=True)
+    if invoice_payment_result is not None:
+        export(
+            "⬇ Tải báo cáo OCR & mapping",
+            {
+                "Hoa_don": invoice_payment_result,
+                "Mapping": st.session_state.get("ai_document_mapping", pd.DataFrame()),
+                "Giao_dich": transaction_payment_result if transaction_payment_result is not None else pd.DataFrame(),
+                "Nhan_dien": summary_df if summary_df is not None else pd.DataFrame()
+            },
+            "Bao_cao_AI_OCR_Mapping.xlsx", "ai_document_export"
+        )
+
+    st.divider()
+    st.markdown("**Đối chiếu hai bảng kê hóa đơn Excel**")
+    st.caption("Dùng cho bảng kê quản trị mua vào và danh sách hóa đơn tải từ cổng Thuế. Hệ thống gộp nhiều dòng thuế suất của cùng hóa đơn trước khi so sánh.")
+    c1, c2 = st.columns(2)
+    with c1:
+        register_a = st.file_uploader(
+            "Bảng kê hóa đơn quản trị", type=["xlsx", "xls", "csv"],
+            key=upload_key("ai_register_bookkeeping")
+        )
+    with c2:
+        register_b = st.file_uploader(
+            "Danh sách hóa đơn từ cổng Thuế", type=["xlsx", "xls", "csv"],
+            key=upload_key("ai_register_tax_portal")
+        )
+    register_epsilon = st.number_input(
+        "Sai số làm tròn cho phép (VNĐ)", min_value=0, max_value=10000,
+        value=2, step=1, key="ai_register_epsilon"
+    )
+    if st.button("📑 Đối chiếu hai bảng kê", disabled=not (register_a and register_b)):
+        try:
+            left_df = read_upload(register_a, ["Số hóa đơn", "Mã số thuế người bán", "Giá trị HHDV"])
+            right_df = read_upload(register_b, ["Số hóa đơn", "MST người bán", "Tổng tiền"])
+            register_result, register_counts = reconcile_invoice_registers(
+                left_df, right_df, int(register_epsilon)
+            )
+            st.session_state["ai_register_result"] = register_result
+            st.session_state["ai_register_counts"] = register_counts
+            st.success("Đã đối chiếu hai bảng kê sau khi chuẩn hóa số hóa đơn và gộp dòng thuế suất.")
+        except Exception as exc:
+            st.error(f"Không đối chiếu được: {exc}")
+    register_result = st.session_state.get("ai_register_result")
+    register_counts = st.session_state.get("ai_register_counts")
+    if register_result is not None:
+        st.markdown("**Tổng hợp kết quả đối chiếu**")
+        metric_labels = [
+            "Khớp hoàn toàn", "Nghi vấn sai MST/chi nhánh", "Nghi vấn ký hiệu hóa đơn",
+            "Thiếu MST – cần xác minh", "Lệch giá trị", "Thiếu ở danh sách hóa đơn"
+        ]
+        cols = st.columns(3)
+        for idx, label in enumerate(metric_labels):
+            cols[idx % 3].metric(label, int((register_result["Trạng thái"] == label).sum()))
+        st.dataframe(register_result, use_container_width=True, hide_index=True)
+        if register_counts:
+            st.caption("Số liệu tính trên hóa đơn đã gộp theo số hóa đơn + MST + ký hiệu; không tính từng dòng thuế suất là một hóa đơn.")
+        export(
+            "⬇ Tải kết quả đối chiếu bảng kê",
+            {"Doi_chieu": register_result, "Tong_hop": pd.DataFrame(
+                [{"Chỉ tiêu": key, "Số lượng": value} for key, value in register_counts.items()]
+            )},
+            "Bao_cao_doi_chieu_bang_ke_hoa_don.xlsx", "ai_register_export"
+        )
 
 st.divider()
-st.caption("TroLyKeToan · MVP theo SRS v1.0 · Kết quả tự động chỉ mang tính hỗ trợ, cần kế toán kiểm tra trước khi ghi sổ/kê khai.")
+st.caption("Trợ lý Kế toán SME · MVP mở rộng theo SRS v1.0 · Kế toán cần kiểm tra kết quả trước khi ghi sổ/kê khai.")

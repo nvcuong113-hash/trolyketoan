@@ -1,20 +1,35 @@
 # Trợ lý Kế toán SME
 
 ## Product
-Trợ lý xử lý file cho kế toán doanh nghiệp nhỏ tại Việt Nam. Ứng dụng Streamlit hỗ trợ đối soát sao kê, kiểm soát hóa đơn XML, chuẩn hóa dữ liệu thu chi, quản trị tuổi nợ, kiểm tra sổ sách và báo cáo dòng tiền.
+Trợ lý quy trình kế toán cho doanh nghiệp nhỏ tại Việt Nam. Xử lý file sao kê, công nợ, hóa đơn XML, nhật ký kế toán và báo cáo quản trị.
 
-## Core modules
-- FR-01: bank statement reconciliation and invoice subset matching.
-- FR-02: electronic invoice XML checks.
-- FR-03: accounting staging and Excel exports.
-- FR-04: receivables aging and reminder message drafting.
-- FR-05: pre-audit checks.
-- FR-06: cash-flow reporting.
-- FR-07: tax/accounting guidance (RAG is not enabled in the MVP).
-- FR-08: plans and payment (real authentication and VietQR webhook are not enabled).
+## Architecture
+- Static GEO front door: web/index.html; deploy Cloudflare Pages with output directory web.
+- Streamlit processing application: app.py.
+- Accounting processing core: core.py and accounting_extensions.py.
+- Supabase: account, profile, subscription and payment metadata only. Never stores customer accounting ledgers or uploaded source files.
+- FastAPI billing webhook: billing_api.py.
+- Legal retrieval: legal_rag.py + legal_storage.py. Official public legal documents are stored in private Supabase Storage, with metadata in legal_documents; only administrator-published, current documents within effective dates are retrieved.
 
-## Data handling
-Uploaded financial files are processed in memory for the current Streamlit session. The MVP does not persist accounting ledgers to a database. Review all generated matching, accounting, and tax outputs before relying on them.
+## Modules
+- FR-01: bank statement reconciliation, exact invoice matching and same-customer subset matching.
+- FR-02: XML invoice parsing and payable-document matching.
+- FR-03: accounting staging, internal management export and template-driven MISA/VACOM workbook mapping.
+- FR-04: receivables aging and reminder drafts.
+- FR-05: preliminary pre-audit checks.
+- FR-06: cash-flow summary, estimated P&L and top receivable/payable counterparties.
+- FR-07: legal RAG with retrieved source excerpts and downloadable evidence checklist.
+- FR-08: Supabase Auth, subscriptions, dynamic VietQR order and SePay webhook activation.
 
-## Limitations
-This is an MVP, not a certified accounting or tax filing product. MISA/VACOM import templates, legal-source retrieval, digital-signature validation, authentication, subscription billing, and payment webhooks require further implementation and vendor-specific specifications.
+## Plans
+- Guest: download up to 50 rows per worksheet.
+- Internal: 69,000 VND/month, one tax code.
+- Accounting service: 249,000 VND/month, multiple tax codes.
+
+## Important limitations
+- Uploaded MISA/VACOM template is required; each MISA voucher type requires its own official template. VACOM end-to-end compatibility is not yet verified.
+- XML digital signatures are not cryptographically verified; tax-authority invoice status is not queried.
+- Legal corpus must be uploaded and independently reviewed by an authorized administrator; no conclusion is returned when no supporting legal excerpt is found.
+- P&L is estimated from account movements and must be reviewed by an accountant.
+- Real payment activation requires Supabase project configuration, bank account and SePay webhook credentials.
+- Uploaded accounting files are processed in session memory and are not written to a ledger database.

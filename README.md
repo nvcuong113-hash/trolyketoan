@@ -1,35 +1,88 @@
 # Trợ lý Kế toán SME
 
-MVP Streamlit theo SRS v1.0.
+## Kiến trúc
+- Streamlit: xử lý tệp kế toán trong bộ nhớ phiên, không lưu sao kê/hóa đơn/sổ kế toán vào database.
+- Supabase: chỉ lưu user, profile, subscription, payment metadata và văn bản pháp luật công khai trong private Storage; không lưu sổ sách khách hàng.
+- FastAPI: nhận webhook SePay độc lập.
+- Static GEO site: thư mục web/, deploy Cloudflare Pages với output directory web.
+- Legal RAG: nạp văn bản chính thức theo metadata hiệu lực; chỉ tài liệu được quản trị viên xác nhận mới được truy xuất.
 
-## Chạy local
-
+## Chạy Streamlit local
+1. Sao chép .env.example thành .env và điền cấu hình local; .env đã được .gitignore.
 ```bash
 python -m venv .venv
-# Windows: .venv\\Scripts\\activate
-# macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 streamlit run app.py
 ```
 
-## Module MVP
-- FR-01: đọc sao kê Excel/CSV, khớp hóa đơn 1-1 và tìm tổ hợp trả gộp.
-- FR-02: đọc XML/ZIP hóa đơn, kiểm tra một số trường thông tin và dấu hiệu chữ ký.
-- FR-03: chuẩn hóa staging, gợi ý định khoản theo từ khóa, xuất hai workbook.
-- FR-04: phân nhóm tuổi nợ và tạo nội dung nhắc việc.
-- FR-05: kiểm tra âm quỹ, thiếu tài khoản và đối chiếu thuế cơ bản.
-- FR-06: tổng hợp thu/chi và báo cáo dòng tiền.
-- FR-07: giao diện chuẩn bị tư vấn; chưa bật RAG/AI do chưa có kho văn bản pháp luật đã kiểm chứng.
-- FR-08: hiển thị gói dịch vụ; chưa tích hợp xác thực và webhook thanh toán.
+## Chạy webhook backend
+```bash
+uvicorn billing_api:app --host 0.0.0.0 --port 8000
+```
 
-## Triển khai Streamlit Community Cloud
-1. Chọn repository và branch `main`.
-2. Main file path: `app.py`.
-3. Deploy; các chức năng xử lý file cơ bản không cần secrets.
+## Cấu hình Supabase
+1. Tạo project Supabase.
+2. Chạy toàn bộ supabase/schema.sql trong SQL Editor.
+3. Lấy Project URL và Publishable Key; đặt SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY cho Streamlit.
+4. Lấy Secret Key chỉ dùng phía server; đặt SUPABASE_SECRET_KEY cho webhook service và bộ nạp kho pháp lý trong Streamlit server.
+5. Không bao giờ đưa Secret Key vào repo hoặc biến môi trường client-side.
 
-## Bảo mật và giới hạn
-- File tải lên được đọc từ bộ nhớ và workbook xuất ra bằng `BytesIO`; ứng dụng không ghi file nghiệp vụ xuống ổ đĩa.
-- Dữ liệu có thể nằm trong session RAM. Nút xóa phiên và TTL được kiểm tra khi có tương tác/rerun; không bảo đảm xóa đúng thời điểm nếu phiên treo hoặc tiến trình được nền tảng giữ lại.
-- Chưa có đăng nhập, phân quyền, subscription DB, webhook VietQR, tích hợp MISA/VACOM chính thức, xác minh chữ ký số XML hoặc RAG pháp luật.
-- File import hiện là staging Excel tổng quát, chưa thể tuyên bố tương thích 100% khi chưa có mẫu import chính thức theo phiên bản MISA/VACOM.
-- Mọi kết quả ghép và định khoản cần kế toán duyệt.
+## Cấu hình SePay / VietQR
+- Khuyến nghị đặt SEPAY_WEBHOOK_HMAC_SECRET và chọn HMAC-SHA256 trên SePay; API Key (SEPAY_WEBHOOK_API_KEY) là phương án thay thế.
+- URL webhook: /webhooks/sepay.
+- Chọn sự kiện tiền vào, bật xác thực HMAC-SHA256 hoặc API Key tương ứng với biến môi trường server.
+- Đặt PAYMENT_BANK, PAYMENT_ACCOUNT, PAYMENT_ACCOUNT_HOLDER; nếu tài khoản VietinBank thuộc nhóm yêu cầu prefix, bật PAYMENT_REQUIRE_SEVQR=true.
+- SePay yêu cầu HTTP 200/201 và JSON {"success": true}; webhook được ghi vào hàng đợi bền vững trước khi phản hồi, xử lý nền và cron worker thử lại. DB chống trùng theo transaction ID.
+- Dùng tính năng gửi thử webhook trước khi nhận tiền thật.
+
+## Cấu hình AI RAG
+- Đặt GEMINI_API_KEY và GEMINI_MODEL=gemini-3.5-flash-lite phía server Streamlit cho tư vấn RAG; chỉ trả lời theo trích đoạn pháp lý đã xác minh.
+- Nạp file PDF có text / DOCX / TXT / MD của văn bản pháp luật chính thức.
+- Điền số hiệu, ngày hiệu lực và URL nguồn; chỉ chọn "Còn hiệu lực" khi đã kiểm chứng.
+- Tài khoản quản trị được allowlist bằng LEGAL_ADMIN_USER_IDS có thể xuất bản văn bản vào private Supabase Storage; mọi phiên người dùng chỉ tải các văn bản còn hiệu lực để truy xuất. Cần SUPABASE_SECRET_KEY phía server.
+
+## AI OCR chứng từ & mapping (FR-09)
+- Cấu hình `GEMINI_API_KEY` và tùy chọn `GEMINI_MODEL` (mặc định `gemini-3.5-flash-lite`) trong Streamlit Secrets.
+- Hỗ trợ PDF, PNG, JPG/JPEG tối đa 25 MB/tệp; tối đa 15 tệp/lượt. PDF được gửi dưới dạng Interactions input `document`; ảnh dùng input `image`.
+- Nội dung được gửi inline bằng base64 tới Gemini Interactions API với `store=false`; ứng dụng không dùng Gemini Files API, không ghi file lên ổ đĩa và không lưu chứng từ kế toán vào Supabase. Người dùng phải chủ động tick xác nhận trước khi OCR.
+- **Lưu ý dữ liệu:** Free Tier của Gemini API có thể sử dụng nội dung được gửi để cải thiện sản phẩm theo bảng giá/điều khoản Google. Không tải chứng từ chứa dữ liệu mật hoặc dữ liệu khách hàng thật lên Free Tier nếu chưa được tổ chức cho phép và rà soát điều khoản. `store=false` không thay thế các điều khoản xử lý dữ liệu của Google.
+- Sau OCR, kiểm tra/sửa dữ liệu nhận diện trước khi mapping. Engine giữ nguyên hậu tố MST chi nhánh, chuẩn hóa số 0 đầu số hóa đơn, gộp dòng thuế suất và không tự ghép khi MST xung đột hoặc có nhiều ứng viên.
+- Mapping hóa đơn–sao kê/UNC chỉ là đề xuất trong phiên. Kế toán xác nhận thủ công; không tự hạch toán hoặc cập nhật sổ kế toán.
+- Đối chiếu bảng kê hỗ trợ biến thể header ngân hàng Việt Nam như `Phát sinh Nợ/Có`, `PS Nợ/Có`, `Ngày GD`, `Diễn giải`, `Mã GD`; dòng có cả Nợ và Có bị đưa về chiều `unknown` và không tự mapping.
+- Cùng một `GEMINI_API_KEY` được dùng cho OCR FR-09 và tư vấn pháp lý FR-07; ứng dụng không còn phụ thuộc OpenAI API.
+
+## Kiểm thử
+```bash
+python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py legal_storage.py process_billing_queue.py document_ai.py gemini_client.py sample_data.py
+pytest -q
+```
+
+## File mẫu dùng thử
+Mỗi phân hệ có nút tải file mẫu trực tiếp trong giao diện. FR-02 có ZIP XML mẫu với chữ ký placeholder (không phải chữ ký số thật); FR-07 có file câu hỏi mẫu, không giả làm văn bản pháp luật. Bộ mẫu được sinh bằng `BytesIO` trong RAM, không ghi file lên server.
+
+## Các nghiệp vụ đã có
+- FR-01: đối soát tiền vào, ghép hóa đơn trả gộp cùng đối tác; gợi ý phân loại tiền ra.
+- FR-02: đọc XML/ZIP; phân loại Đủ chứng từ, Thiếu hóa đơn (Nợ chứng từ), Hóa đơn treo dựa trên khoản chi, nhà cung cấp và số tiền.
+- FR-03: staging; xuất báo cáo nội bộ; điền file mẫu import MISA/VACOM do người dùng tải lên. Thu tiền gửi, Chi tiền gửi và Chuyển tiền nội bộ là ba loại file riêng; chuyển nội bộ bắt buộc có tài khoản đi/đến.
+- FR-04: tuổi nợ và mẫu nhắc công nợ/nhắc hóa đơn/hoàn ứng.
+- FR-05: 6 nhóm cảnh báo sơ bộ gồm âm quỹ, thiếu tài khoản, rà soát tiền mặt, lệch VAT, tài khoản bất thường/dòng trùng, cân đối phát sinh và kết chuyển.
+- FR-06: báo cáo dòng tiền; P&L ước tính và Top 5 phải thu/phải trả khi có sổ chi tiết.
+- FR-07: legal RAG cục bộ theo văn bản đã nạp, trích đoạn nguồn và phiếu checklist.
+- FR-08: Supabase Auth, gói thuê bao, tạo payment order, QR, SePay webhook và kích hoạt subscription.
+
+## Giới hạn / việc cần nghiệm thu với dữ liệu thật
+- MISA: Thu tiền gửi, Chi tiền gửi và Chuyển tiền nội bộ dùng ba mẫu Excel riêng; cần tải mẫu chính xác từ phiên bản đang dùng để mapping. MISA SME 2026 nêu các cột bắt buộc cho Thu tiền gửi và Chi tiền gửi gồm ngày hạch toán, ngày chứng từ, số chứng từ. Chương trình không hỗ trợ nhập trực tiếp file sao kê ngân hàng; cần tách Thu tiền gửi, Chi tiền gửi và Chuyển tiền nội bộ thành từng file mẫu riêng.
+- VACOM: chưa có file mẫu thực tế nên chỉ hỗ trợ mapping theo header của file mẫu do người dùng tải lên, chưa xác nhận khả năng import end-to-end.
+- Chữ ký số XML chưa được xác thực mật mã; chưa kết nối tra cứu trạng thái hóa đơn trên cổng Thuế.
+- Legal corpus chưa được đóng gói sẵn; cần người quản trị nạp văn bản, kiểm tra hiệu lực và xác nhận metadata. Tệp được lưu ở Supabase Storage private; chỉ URL nguồn chính thức được chấp nhận. Không bật kết luận nếu không có văn bản phù hợp.
+- P&L là ước tính theo tài khoản và cần map theo hệ thống tài khoản / chế độ kế toán doanh nghiệp.
+- 20 triệu không được hard-code làm ngưỡng thuế cố định; cần xác định điều kiện theo từng loại thuế, kỳ và văn bản áp dụng.
+- SePay/Supabase chưa thể nhận tiền thật cho đến khi chủ tài khoản cung cấp và cấu hình credentials, tài khoản ngân hàng và webhook. HMAC theo raw body + timestamp; API Key là phương án dự phòng. Cấu hình IP allowlist và kiểm tra đối soát giao dịch định kỳ trước production.
+- Dữ liệu tạm được xóa sau download theo mặc định và có nút xóa thủ công. Session TTL được kiểm tra khi Streamlit rerun; không đảm bảo xóa tức thì nếu browser treo/worker vẫn giữ phiên.
+- CI có benchmark hồi quy 5.000 dòng/3 giây trên GitHub runner; vẫn cần benchmark với mẫu thực tế từng ngân hàng trước khi cam kết SLA production.
+
+## Deploy
+- Streamlit Community Cloud: chọn repository, branch, main file app.py, cấu hình secrets theo .env.example.
+- Webhook API: deploy billing_api.py lên Render/Railway/VPS và cấu hình biến môi trường server-only.
+- Static front door: Cloudflare Pages, output directory web. Trước khi public, cập nhật window.TROLY_APP_URL trong web/config.js sang URL Streamlit thực tế.
