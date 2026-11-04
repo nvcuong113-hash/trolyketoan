@@ -207,6 +207,7 @@ def extract_document(filename: str, content: bytes, api_key: str,
         input=[{"role": "user", "content": [
             file_part, {"type": "input_text", "text": instructions}
         ]}],
+        store=False,
         text={"format": {
             "type": "json_schema",
             "name": "accounting_document_extraction",
