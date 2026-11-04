@@ -320,42 +320,54 @@ def _register_rows(frame: pd.DataFrame, source: str) -> list[dict[str, Any]]:
                                           "Giá trị HHDV chưa thuế", "Tiền trước thuế", "Tiền chưa thuế"])
     vat_col = _find_column(frame.columns, ["Tổng tiền thuế", "Thuế GTGT", "Tiền thuế GTGT", "Tiền thuế"])
     total_col = _find_column(frame.columns, ["Tổng tiền thanh toán", "Tổng thanh toán", "Tổng tiền phải thanh toán"])
-    if not tax_col:
-        raise ValueError(f"{source}: không nhận diện được cột MST người bán.")
     aggregates: dict[tuple, dict[str, Any]] = {}
     for _, row in frame.iterrows():
         number = normalize_invoice_number(row.get(number_col))
-        tax = normalize_tax_code(row.get(tax_col))
-        if not number or not tax:
+        if not number:
             continue
-        symbol = str(row.get(symbol_col, "") or "").strip() if symbol_col else ""
-        key = (number, tax, normalize_invoice_number(symbol))
+        tax = normalize_tax_code(row.get(tax_col)) if tax_col else ""
+        symbol_value = row.get(symbol_col) if symbol_col else ""
+        symbol = "" if symbol_value is None or pd.isna(symbol_value) else str(symbol_value).strip()
+        clean_symbol = normalize_invoice_number(symbol)
+        key = (number, tax, clean_symbol)
         net = parse_amount(row.get(net_col)) if net_col else 0
         vat = parse_amount(row.get(vat_col)) if vat_col else 0
-        total = parse_amount(row.get(total_col)) if total_col else net + vat
-        if total <= 0 and (net > 0 or vat > 0):
-            total = net + vat
+        reported_total = parse_amount(row.get(total_col)) if total_col else 0
+        name_value = row.get(name_col) if name_col else ""
+        name = "" if name_value is None or pd.isna(name_value) else str(name_value).strip()
+        date_value = row.get(date_col) if date_col else None
         if key not in aggregates:
             aggregates[key] = {
                 "source": source, "invoice_number": number, "invoice_number_raw": str(row.get(number_col)),
-                "symbol": symbol, "tax": tax,
-                "name": str(row.get(name_col, "") or "") if name_col else "",
-                "date": _date_text(row.get(date_col)) if date_col else None,
-                "net": 0.0, "vat": 0.0, "total": 0.0, "line_count": 0
+                "symbol": symbol, "tax": tax, "name": name,
+                "date": _date_text(date_value) if date_col else None,
+                "net": 0.0, "vat": 0.0, "total": 0.0, "reported_totals": [], "line_count": 0
             }
         item = aggregates[key]
         item["net"] += net
         item["vat"] += vat
-        item["total"] += total
+        if reported_total > 0:
+            item["reported_totals"].append(reported_total)
         item["line_count"] += 1
-        if not item["name"] and name_col:
-            item["name"] = str(row.get(name_col, "") or "")
+        if not item["name"] and name:
+            item["name"] = name
+    for item in aggregates.values():
+        totals = item.pop("reported_totals")
+        # Some exports repeat the full invoice total on every tax-rate row;
+        # others provide a separate line total. Avoid multiplying the invoice total.
+        if totals:
+            if len(totals) > 1 and max(totals) - min(totals) <= 2:
+                item["total"] = max(totals)
+            else:
+                item["total"] = sum(totals)
+        else:
+            item["total"] = item["net"] + item["vat"]
     return list(aggregates.values())
 
 
 def reconcile_invoice_registers(left: pd.DataFrame, right: pd.DataFrame,
                                 epsilon: int = 2) -> tuple[pd.DataFrame, dict[str, int]]:
-    """Compare bookkeeping purchase register with a tax-portal invoice list."""
+    """Compare purchase register and tax portal data with strict invoice/MST/symbol controls."""
     a = _register_rows(left, "Bảng kê quản trị")
     b = _register_rows(right, "Danh sách hóa đơn")
     index: dict[str, list[int]] = {}
@@ -367,8 +379,15 @@ def reconcile_invoice_registers(left: pd.DataFrame, right: pd.DataFrame,
         candidates = [idx for idx in index.get(item["invoice_number"], []) if idx not in used]
         selected = None
         if len(candidates) > 1:
-            exact_tax = [idx for idx in candidates if b[idx]["tax"] == item["tax"]]
-            if len(exact_tax) == 1:
+            exact_symbol = [
+                idx for idx in candidates
+                if item["symbol"] and b[idx]["symbol"]
+                and normalize_invoice_number(item["symbol"]) == normalize_invoice_number(b[idx]["symbol"])
+            ]
+            exact_tax = [idx for idx in candidates if item["tax"] and b[idx]["tax"] == item["tax"]]
+            if len(exact_symbol) == 1:
+                selected = exact_symbol[0]
+            elif len(exact_tax) == 1:
                 selected = exact_tax[0]
             else:
                 output.append(_register_result(item, None, "Cần kiểm tra – nhiều ứng viên"))
@@ -380,8 +399,12 @@ def reconcile_invoice_registers(left: pd.DataFrame, right: pd.DataFrame,
             continue
         other = b[selected]
         used.add(selected)
-        if item["tax"] != other["tax"]:
+        if not item["tax"] or not other["tax"]:
+            status = "Thiếu MST – cần xác minh"
+        elif item["tax"] != other["tax"]:
             status = "Nghi vấn sai MST/chi nhánh"
+        elif item["symbol"] and other["symbol"] and normalize_invoice_number(item["symbol"]) != normalize_invoice_number(other["symbol"]):
+            status = "Nghi vấn ký hiệu hóa đơn"
         elif (abs(item["net"] - other["net"]) > epsilon or
               abs(item["vat"] - other["vat"]) > epsilon or
               abs(item["total"] - other["total"]) > epsilon):
@@ -393,15 +416,13 @@ def reconcile_invoice_registers(left: pd.DataFrame, right: pd.DataFrame,
         if idx not in used:
             output.append(_register_result(None, item, "Chỉ có ở danh sách hóa đơn"))
     result = pd.DataFrame(output)
-    counts = {
-        "Tổng dòng sau gộp": len(result),
-        "Khớp hoàn toàn": int((result["Trạng thái"] == "Khớp hoàn toàn").sum()) if not result.empty else 0,
-        "Nghi vấn sai MST/chi nhánh": int((result["Trạng thái"] == "Nghi vấn sai MST/chi nhánh").sum()) if not result.empty else 0,
-        "Lệch giá trị": int((result["Trạng thái"] == "Lệch giá trị").sum()) if not result.empty else 0,
-        "Thiếu ở danh sách hóa đơn": int((result["Trạng thái"] == "Thiếu ở danh sách hóa đơn").sum()) if not result.empty else 0,
-        "Chỉ có ở danh sách hóa đơn": int((result["Trạng thái"] == "Chỉ có ở danh sách hóa đơn").sum()) if not result.empty else 0,
-        "Cần kiểm tra – nhiều ứng viên": int((result["Trạng thái"] == "Cần kiểm tra – nhiều ứng viên").sum()) if not result.empty else 0
-    }
+    labels = [
+        "Khớp hoàn toàn", "Nghi vấn sai MST/chi nhánh", "Nghi vấn ký hiệu hóa đơn",
+        "Thiếu MST – cần xác minh", "Lệch giá trị", "Thiếu ở danh sách hóa đơn",
+        "Chỉ có ở danh sách hóa đơn", "Cần kiểm tra – nhiều ứng viên"
+    ]
+    counts = {"Tổng dòng sau gộp": len(result)}
+    counts.update({label: int((result["Trạng thái"] == label).sum()) if not result.empty else 0 for label in labels})
     return result, counts
 
 
@@ -409,6 +430,7 @@ def _register_result(left: dict | None, right: dict | None, status: str) -> dict
     a, b = left or {}, right or {}
     return {
         "Trạng thái": status, "Số hóa đơn chuẩn": a.get("invoice_number") or b.get("invoice_number"),
+        "Ký hiệu bảng kê": a.get("symbol"), "Ký hiệu danh sách": b.get("symbol"),
         "Số HĐ bảng kê": a.get("invoice_number_raw"), "Số HĐ danh sách": b.get("invoice_number_raw"),
         "MST bảng kê": a.get("tax"), "MST danh sách": b.get("tax"),
         "Tên người bán bảng kê": a.get("name"), "Tên người bán danh sách": b.get("name"),
