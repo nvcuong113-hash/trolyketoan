@@ -149,11 +149,31 @@ def test_register_reconciliation_uses_invoice_symbol_to_resolve_duplicate_number
     assert result.iloc[0]["Trạng thái"] == "Khớp hoàn toàn"
 
 
-def test_extract_document_sends_pdf_in_memory_and_disables_response_storage(monkeypatch):
+def _mock_gemini_response(payload):
+    import json
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "steps": [{
+                    "type": "model_output",
+                    "content": [{"type": "text", "text": json.dumps(payload)}]
+                }]
+            }).encode("utf-8")
+
+    return FakeResponse()
+
+
+def test_extract_document_sends_pdf_inline_to_gemini_without_storage(monkeypatch):
     import base64
     import json
-    import sys
-    from types import SimpleNamespace
+    import urllib.request
     from document_ai import extract_document
 
     captured = {}
@@ -163,56 +183,57 @@ def test_extract_document_sends_pdf_in_memory_and_disables_response_storage(monk
         "transactions": [], "warnings": []
     }
 
-    class FakeResponses:
-        def create(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(output_text=json.dumps(payload))
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _mock_gemini_response(payload)
 
-    class FakeOpenAI:
-        def __init__(self, api_key):
-            captured["api_key"] = api_key
-            self.responses = FakeResponses()
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     raw = b"%PDF-1.4 test document"
-    result = extract_document("invoice.pdf", raw, "test-key", "gpt-4o-mini", "high")
+    result = extract_document("invoice.pdf", raw, "gemini-test-key")
 
+    request_body = json.loads(captured["request"].data.decode("utf-8"))
+    part = request_body["input"][0]
     assert result["document_type"] == "invoice"
-    assert captured["store"] is False
-    part = captured["input"][0]["content"][0]
-    assert part["type"] == "input_file"
-    assert part["detail"] == "high"
-    assert part["file_data"].endswith(base64.b64encode(raw).decode("ascii"))
+    assert result["source_file"] == "invoice.pdf"
+    assert request_body["model"] == "gemini-3.5-flash-lite"
+    assert request_body["store"] is False
+    assert part["type"] == "document"
+    assert part["mime_type"] == "application/pdf"
+    assert part["data"] == base64.b64encode(raw).decode("ascii")
+    assert request_body["response_format"]["mime_type"] == "application/json"
+    assert captured["request"].get_header("X-goog-api-key") == "gemini-test-key"
+    assert captured["timeout"] == 120
 
 
-def test_extract_document_sends_image_as_input_image(monkeypatch):
+def test_extract_document_sends_image_inline_to_gemini(monkeypatch):
+    import base64
     import json
-    import sys
-    from types import SimpleNamespace
+    import urllib.request
     from document_ai import extract_document
 
-    captured = {}
     payload = {
         "document_type": "payment_proof", "document_confidence": 0.95,
         "document_summary": "Ủy nhiệm chi", "invoices": [],
         "transactions": [], "warnings": []
     }
+    captured = {}
 
-    class FakeResponses:
-        def create(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(output_text=json.dumps(payload))
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        return _mock_gemini_response(payload)
 
-    class FakeOpenAI:
-        def __init__(self, api_key):
-            self.responses = FakeResponses()
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    raw = b"png-bytes"
+    result = extract_document("transfer.png", raw, "gemini-test-key", "gemini-3.5-flash-lite")
 
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
-    extract_document("transfer.png", b"png-bytes", "test-key")
-    part = captured["input"][0]["content"][0]
-    assert part["type"] == "input_image"
-    assert part["image_url"].startswith("data:image/png;base64,")
-    assert captured["store"] is False
+    request_body = json.loads(captured["request"].data.decode("utf-8"))
+    part = request_body["input"][0]
+    assert result["document_type"] == "payment_proof"
+    assert part["type"] == "image"
+    assert part["mime_type"] == "image/png"
+    assert part["data"] == base64.b64encode(raw).decode("ascii")
+    assert request_body["store"] is False
 
 
 def test_normalize_bank_statement_supports_common_vietnamese_headers():
