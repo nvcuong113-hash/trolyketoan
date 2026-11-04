@@ -18,6 +18,7 @@ from legal_rag import build_legal_index, retrieve_legal_context, answer_with_ope
 from legal_storage import publish_legal_document, load_published_legal_documents
 from sample_data import sample_workbook, sample_xml_zip, sample_legal_questions
 from reports import management_report_pdf
+from document_ai import extract_document, documents_to_dataframes, normalize_bank_statement, reconcile_invoice_registers, map_invoice_payments
 
 st.set_page_config(page_title="Trợ lý Kế toán SME", page_icon="🧾", layout="wide")
 TTL_SECONDS = 600
@@ -161,7 +162,7 @@ with st.sidebar:
         clear_data()
         st.rerun()
 
-tabs = st.tabs(["Tổng quan","01 · Đối soát","02 · Hóa đơn","03 · Xuất dữ liệu","04 · Tuổi nợ","05 · Pre-audit","06 · Báo cáo","07 · Cố vấn thuế","08 · Tài khoản & gói"])
+tabs = st.tabs(["Tổng quan","01 · Đối soát","02 · Hóa đơn","03 · Xuất dữ liệu","04 · Tuổi nợ","05 · Pre-audit","06 · Báo cáo","07 · Cố vấn thuế","08 · Tài khoản & gói", "09 · AI Chứng từ & Đối chiếu"])
 
 with tabs[0]:
     st.subheader("Trung tâm nghiệp vụ kế toán")
@@ -601,6 +602,189 @@ with tabs[8]:
                 except Exception as exc:
                     st.error(f"Không tạo được tài khoản: {exc}")
     st.caption("Webhook thanh toán chạy độc lập bằng lệnh uvicorn billing_api:app. Không đưa Supabase Secret Key hoặc SePay API Key vào giao diện Streamlit.")
+
+
+
+with tabs[9]:
+    st.subheader("AI OCR chứng từ PDF/ảnh & mapping đối chiếu đa nguồn")
+    st.caption("Đọc hóa đơn, sao kê, ủy nhiệm chi và ảnh chụp nội dung chuyển tiền; chuẩn hóa dữ liệu rồi gợi ý ghép chứng từ.")
+    st.warning(
+        "Quyền riêng tư: khi chạy OCR, nội dung PDF/ảnh được gửi trực tiếp tới OpenAI API theo tài khoản API đã cấu hình. "
+        "Hệ thống không ghi file xuống ổ đĩa, không tạo File ID lưu trữ trên OpenAI và không lưu chứng từ kế toán vào Supabase. "
+        "Chỉ tiếp tục khi bạn được phép chia sẻ chứng từ cho nhà cung cấp AI."
+    )
+    api_key = get_setting("OPENAI_API_KEY", "")
+    model_name = get_setting("OPENAI_MODEL", "gpt-4o-mini")
+    if not api_key:
+        st.info("Chưa cấu hình OPENAI_API_KEY trong Streamlit Secrets. Có thể dùng phần đối chiếu Excel phía dưới; OCR AI sẽ mở khi có khóa API.")
+    consent = st.checkbox(
+        "Tôi đồng ý gửi nội dung các tệp được chọn tới OpenAI API để nhận diện chứng từ.",
+        value=False, key="ai_document_external_consent"
+    )
+    detail = st.radio(
+        "Mức đọc trang PDF", ["high", "low"], horizontal=True, index=0,
+        help="High phù hợp chứng từ scan/chữ nhỏ nhưng có thể tốn token hơn."
+    )
+    ai_files = st.file_uploader(
+        "1. Tải nhiều chứng từ PDF/ảnh (hóa đơn, sao kê, UNC, ảnh chuyển tiền)",
+        type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True,
+        key=upload_key("ai_documents")
+    )
+    bank_file = st.file_uploader(
+        "2. Bảng kê ngân hàng Excel/CSV (khuyến nghị nếu có dữ liệu điện tử)",
+        type=["xlsx", "xls", "csv"], key=upload_key("ai_bank_statement")
+    )
+    if st.button(
+        "🤖 Đọc chứng từ bằng AI",
+        type="primary", disabled=not (api_key and consent and ai_files)
+    ):
+        if len(ai_files) > 15:
+            st.error("Mỗi lượt tối đa 15 tệp. Hãy chia nhỏ lô chứng từ.")
+        else:
+            extracted = []
+            failures = []
+            with st.spinner("AI đang đọc chứng từ và trích xuất dữ liệu..."):
+                for uploaded in ai_files:
+                    try:
+                        extracted.append(extract_document(
+                            uploaded.name, uploaded.getvalue(), api_key, model_name, detail
+                        ))
+                    except Exception as exc:
+                        failures.append(f"{uploaded.name}: {exc}")
+            inv_df, tx_df, summary_df = documents_to_dataframes(extracted)
+            if bank_file:
+                try:
+                    bank_df = read_upload(bank_file, [
+                        "Ngày giao dịch", "Số tiền ghi Nợ", "Số tiền ghi Có", "Nội dung giao dịch"
+                    ])
+                    bank_tx = normalize_bank_statement(bank_df)
+                    if not bank_tx.empty:
+                        tx_df = pd.concat([tx_df, bank_tx], ignore_index=True)
+                except Exception as exc:
+                    failures.append(f"Bảng kê ngân hàng: {exc}")
+            st.session_state["ai_document_summary"] = summary_df
+            st.session_state["ai_invoice_records"] = inv_df
+            st.session_state["ai_transaction_records"] = tx_df
+            st.session_state["ai_document_failures"] = failures
+            st.session_state.pop("ai_document_mapping", None)
+            st.success(f"Đã đọc thành công {len(extracted)}/{len(ai_files)} tệp.")
+    failures = st.session_state.get("ai_document_failures", [])
+    for failure in failures:
+        st.warning(failure)
+    summary_df = st.session_state.get("ai_document_summary")
+    inv_df = st.session_state.get("ai_invoice_records")
+    tx_df = st.session_state.get("ai_transaction_records")
+    if summary_df is not None:
+        st.markdown("**Kết quả nhận diện từng tệp**")
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        if inv_df is not None and not inv_df.empty:
+            st.markdown("**Hóa đơn trích xuất – kiểm tra/sửa trước khi mapping**")
+            inv_edited = st.data_editor(inv_df, use_container_width=True, hide_index=True, key="ai_invoice_editor")
+            st.session_state["ai_invoice_records"] = inv_edited
+        if tx_df is not None and not tx_df.empty:
+            st.markdown("**Giao dịch thanh toán trích xuất – kiểm tra/sửa trước khi mapping**")
+            tx_edited = st.data_editor(tx_df, use_container_width=True, hide_index=True, key="ai_transaction_editor")
+            st.session_state["ai_transaction_records"] = tx_edited
+        st.caption("Các trường có độ tin cậy thấp hoặc bằng chứng OCR không rõ phải được kiểm tra trên chứng từ gốc. AI không tự xác nhận tính hợp lệ pháp lý/chữ ký số.")
+        if inv_df is not None and not inv_df.empty and tx_df is not None and not tx_df.empty:
+            if st.button("🔗 Mapping hóa đơn với sao kê/UNC", key="ai_run_mapping"):
+                try:
+                    invoice_result, mapping_result, transaction_result = map_invoice_payments(
+                        st.session_state["ai_invoice_records"],
+                        st.session_state["ai_transaction_records"]
+                    )
+                    if not mapping_result.empty:
+                        mapping_result["Kế toán xác nhận"] = False
+                    st.session_state["ai_invoice_payment_result"] = invoice_result
+                    st.session_state["ai_document_mapping"] = mapping_result
+                    st.session_state["ai_transaction_payment_result"] = transaction_result
+                    st.success("Đã tạo gợi ý mapping. Chưa ghi sổ và chưa xác nhận thanh toán.")
+                except Exception as exc:
+                    st.error(f"Không mapping được: {exc}")
+    invoice_payment_result = st.session_state.get("ai_invoice_payment_result")
+    mapping_result = st.session_state.get("ai_document_mapping")
+    transaction_payment_result = st.session_state.get("ai_transaction_payment_result")
+    if invoice_payment_result is not None:
+        st.markdown("**Tình trạng thanh toán theo hóa đơn**")
+        st.dataframe(invoice_payment_result, use_container_width=True, hide_index=True)
+    if mapping_result is not None:
+        if mapping_result.empty:
+            st.info("Chưa tìm thấy giao dịch đủ căn cứ để mapping tự động.")
+        else:
+            st.markdown("**Các cặp mapping đề xuất – kế toán xác nhận thủ công**")
+            reviewed = st.data_editor(
+                mapping_result, use_container_width=True, hide_index=True,
+                key="ai_mapping_editor",
+                column_config={"Kế toán xác nhận": st.column_config.CheckboxColumn(
+                    "Kế toán xác nhận", help="Chỉ đánh dấu sau khi đã soát chứng từ gốc."
+                )}
+            )
+            if st.button("✓ Ghi nhận xác nhận trong phiên", key="ai_confirm_mapping"):
+                reviewed.loc[reviewed["Kế toán xác nhận"].fillna(False), "Trạng thái"] = "Đã xác nhận bởi kế toán"
+                st.session_state["ai_document_mapping"] = reviewed
+                st.success("Đã ghi nhận xác nhận trong phiên hiện tại; chưa ghi dữ liệu vào sổ kế toán.")
+    if transaction_payment_result is not None:
+        with st.expander("Chi tiết phân bổ từng giao dịch"):
+            st.dataframe(transaction_payment_result, use_container_width=True, hide_index=True)
+    if invoice_payment_result is not None:
+        export(
+            "⬇ Tải báo cáo OCR & mapping",
+            {
+                "Hoa_don": invoice_payment_result,
+                "Mapping": st.session_state.get("ai_document_mapping", pd.DataFrame()),
+                "Giao_dich": transaction_payment_result if transaction_payment_result is not None else pd.DataFrame(),
+                "Nhan_dien": summary_df if summary_df is not None else pd.DataFrame()
+            },
+            "Bao_cao_AI_OCR_Mapping.xlsx", "ai_document_export"
+        )
+
+    st.divider()
+    st.markdown("**Đối chiếu hai bảng kê hóa đơn Excel**")
+    st.caption("Dùng cho bảng kê quản trị mua vào và danh sách hóa đơn tải từ cổng Thuế. Hệ thống gộp nhiều dòng thuế suất của cùng hóa đơn trước khi so sánh.")
+    c1, c2 = st.columns(2)
+    with c1:
+        register_a = st.file_uploader(
+            "Bảng kê hóa đơn quản trị", type=["xlsx", "xls", "csv"],
+            key=upload_key("ai_register_bookkeeping")
+        )
+    with c2:
+        register_b = st.file_uploader(
+            "Danh sách hóa đơn từ cổng Thuế", type=["xlsx", "xls", "csv"],
+            key=upload_key("ai_register_tax_portal")
+        )
+    register_epsilon = st.number_input(
+        "Sai số làm tròn cho phép (VNĐ)", min_value=0, max_value=10000,
+        value=2, step=1, key="ai_register_epsilon"
+    )
+    if st.button("📑 Đối chiếu hai bảng kê", disabled=not (register_a and register_b)):
+        try:
+            left_df = read_upload(register_a, ["Số hóa đơn", "Mã số thuế người bán", "Giá trị HHDV"])
+            right_df = read_upload(register_b, ["Số hóa đơn", "MST người bán", "Tổng tiền"])
+            register_result, register_counts = reconcile_invoice_registers(
+                left_df, right_df, int(register_epsilon)
+            )
+            st.session_state["ai_register_result"] = register_result
+            st.session_state["ai_register_counts"] = register_counts
+            st.success("Đã đối chiếu hai bảng kê sau khi chuẩn hóa số hóa đơn và gộp dòng thuế suất.")
+        except Exception as exc:
+            st.error(f"Không đối chiếu được: {exc}")
+    register_result = st.session_state.get("ai_register_result")
+    register_counts = st.session_state.get("ai_register_counts")
+    if register_result is not None:
+        st.markdown("**Tổng hợp kết quả đối chiếu**")
+        cols = st.columns(4)
+        for col, label in zip(cols, ["Khớp hoàn toàn", "Nghi vấn sai MST/chi nhánh", "Lệch giá trị", "Thiếu ở danh sách hóa đơn"]):
+            col.metric(label, int((register_result["Trạng thái"] == label).sum()))
+        st.dataframe(register_result, use_container_width=True, hide_index=True)
+        if register_counts:
+            st.caption("Số liệu tính trên hóa đơn đã gộp theo số hóa đơn + MST + ký hiệu; không tính từng dòng thuế suất là một hóa đơn.")
+        export(
+            "⬇ Tải kết quả đối chiếu bảng kê",
+            {"Doi_chieu": register_result, "Tong_hop": pd.DataFrame(
+                [{"Chỉ tiêu": key, "Số lượng": value} for key, value in register_counts.items()]
+            )},
+            "Bao_cao_doi_chieu_bang_ke_hoa_don.xlsx", "ai_register_export"
+        )
 
 st.divider()
 st.caption("Trợ lý Kế toán SME · MVP mở rộng theo SRS v1.0 · Kế toán cần kiểm tra kết quả trước khi ghi sổ/kê khai.")
