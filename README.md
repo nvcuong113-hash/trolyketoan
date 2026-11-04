@@ -43,13 +43,14 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 - Tài khoản quản trị được allowlist bằng LEGAL_ADMIN_USER_IDS có thể xuất bản văn bản vào private Supabase Storage; mọi phiên người dùng chỉ tải các văn bản còn hiệu lực để truy xuất. Cần SUPABASE_SECRET_KEY phía server.
 
 ## AI OCR chứng từ & mapping (FR-09)
-- Cấu hình `OPENAI_API_KEY` và tùy chọn `OPENAI_MODEL` (mặc định `gpt-4o-mini`) trong Streamlit Secrets.
-- Hỗ trợ PDF, PNG, JPG/JPEG tối đa 25 MB/tệp; tối đa 15 tệp/lượt. PDF được gửi dưới dạng `input_file` để mô hình đọc text và ảnh trang; ảnh dùng `input_image`.
-- Nội dung được gửi trực tiếp trong request Responses API dưới dạng base64 với `store=False`; ứng dụng không tạo bản ghi Files API, không ghi file lên ổ đĩa và không lưu dữ liệu kế toán vào Supabase. Cài đặt này tắt lưu response object, không đồng nghĩa nhà cung cấp không xử lý/ghi log theo chính sách dịch vụ. Người dùng phải chủ động tick xác nhận trước khi OCR.
+- Cấu hình `GEMINI_API_KEY` và tùy chọn `GEMINI_MODEL` (mặc định `gemini-3.5-flash-lite`) trong Streamlit Secrets.
+- Hỗ trợ PDF, PNG, JPG/JPEG tối đa 25 MB/tệp; tối đa 15 tệp/lượt. PDF được gửi dưới dạng Interactions input `document`; ảnh dùng input `image`.
+- Nội dung được gửi inline bằng base64 tới Gemini Interactions API với `store=false`; ứng dụng không dùng Gemini Files API, không ghi file lên ổ đĩa và không lưu chứng từ kế toán vào Supabase. Người dùng phải chủ động tick xác nhận trước khi OCR.
+- **Lưu ý dữ liệu:** Free Tier của Gemini API có thể sử dụng nội dung được gửi để cải thiện sản phẩm theo bảng giá/điều khoản Google. Không tải chứng từ chứa dữ liệu mật hoặc dữ liệu khách hàng thật lên Free Tier nếu chưa được tổ chức cho phép và rà soát điều khoản. `store=false` không thay thế các điều khoản xử lý dữ liệu của Google.
 - Sau OCR, kiểm tra/sửa dữ liệu nhận diện trước khi mapping. Engine giữ nguyên hậu tố MST chi nhánh, chuẩn hóa số 0 đầu số hóa đơn, gộp dòng thuế suất và không tự ghép khi MST xung đột hoặc có nhiều ứng viên.
 - Mapping hóa đơn–sao kê/UNC chỉ là đề xuất trong phiên. Kế toán xác nhận thủ công; không tự hạch toán hoặc cập nhật sổ kế toán.
 - Đối chiếu bảng kê hỗ trợ biến thể header ngân hàng Việt Nam như `Phát sinh Nợ/Có`, `PS Nợ/Có`, `Ngày GD`, `Diễn giải`, `Mã GD`; dòng có cả Nợ và Có bị đưa về chiều `unknown` và không tự mapping.
-- Chi phí API phụ thuộc số trang, độ chi tiết PDF và model. Dùng `low` để giảm token khi chứng từ rõ; dùng `high` cho scan/chữ nhỏ.
+- `OPENAI_API_KEY` vẫn chỉ dùng cho Cố vấn pháp lý RAG hiện có (nếu bật); FR-09 OCR không gọi OpenAI.
 
 ## Kiểm thử
 ```bash
