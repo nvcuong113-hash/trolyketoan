@@ -14,6 +14,11 @@
 - [ ] Cấu hình SUPABASE_SECRET_KEY ở server-side secrets để nạp kho pháp lý private.
 - [ ] Cấu hình LEGAL_ADMIN_USER_IDS bằng UUID tài khoản Auth được phép xuất bản văn bản.
 - [ ] Cấu hình OPENAI_API_KEY nếu muốn tạo câu trả lời từ các đoạn văn bản đã truy xuất.
+- [ ] Cấu hình OPENAI_API_KEY và OPENAI_MODEL (ví dụ gpt-4o-mini) cho FR-09; không ghi khóa vào repo.
+- [ ] Kiểm thử OCR PDF có text, PDF scan, ảnh hóa đơn, sao kê, UNC và ảnh chụp chuyển tiền; kiểm tra cả trang nhiều dòng giao dịch.
+- [ ] Xác nhận cảnh báo đồng ý gửi dữ liệu cho OpenAI API; kiểm tra ứng dụng không tạo File API record, không ghi chứng từ xuống ổ đĩa và dữ liệu tạm bị xóa sau phiên.
+- [ ] Kiểm thử mapping 1-1, thanh toán một phần, thanh toán gộp 1-N, MST chi nhánh -002/-003, số hóa đơn có số 0 đầu và nhiều ứng viên trùng tiền.
+- [ ] Người dùng rà soát/sửa dữ liệu OCR trước khi mapping và xác nhận thủ công; không tự ghi sổ.
 - [ ] Kiểm tra chức năng xóa dữ liệu sau tải xuống và timeout phiên.
 - [ ] Kiểm tra guest chỉ tải tối đa 50 dòng mỗi sheet.
 
