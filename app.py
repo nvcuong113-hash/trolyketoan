@@ -609,21 +609,19 @@ with tabs[9]:
     st.subheader("AI OCR chứng từ PDF/ảnh & mapping đối chiếu đa nguồn")
     st.caption("Đọc hóa đơn, sao kê, ủy nhiệm chi và ảnh chụp nội dung chuyển tiền; chuẩn hóa dữ liệu rồi gợi ý ghép chứng từ.")
     st.warning(
-        "Quyền riêng tư: khi chạy OCR, nội dung PDF/ảnh được gửi trực tiếp tới OpenAI API theo tài khoản API đã cấu hình. "
-        "Hệ thống không ghi file xuống ổ đĩa, không tạo File ID lưu trữ trên OpenAI và không lưu chứng từ kế toán vào Supabase. "
-        "Chỉ tiếp tục khi bạn được phép chia sẻ chứng từ cho nhà cung cấp AI."
+        "Quyền riêng tư: khi chạy OCR, nội dung PDF/ảnh được gửi trực tiếp tới Google Gemini API. "
+        "Hệ thống gửi dữ liệu inline, không dùng Gemini Files API, không ghi file xuống ổ đĩa và không lưu chứng từ vào Supabase. "
+        "Lưu ý: Google công bố dữ liệu gửi bằng Free Tier có thể được dùng để cải thiện sản phẩm. "
+        "Không tải chứng từ mật/dữ liệu khách hàng thật lên Free Tier nếu chưa được tổ chức cho phép và rà soát điều khoản."
     )
-    api_key = get_setting("OPENAI_API_KEY", "")
-    model_name = get_setting("OPENAI_MODEL", "gpt-4o-mini")
+    api_key = get_setting("GEMINI_API_KEY", "")
+    model_name = get_setting("GEMINI_MODEL", "gemini-3.5-flash-lite")
     if not api_key:
-        st.info("Chưa cấu hình OPENAI_API_KEY trong Streamlit Secrets. Có thể dùng phần đối chiếu Excel phía dưới; OCR AI sẽ mở khi có khóa API.")
+        st.info("Chưa cấu hình GEMINI_API_KEY trong Streamlit Secrets. Có thể dùng phần đối chiếu Excel phía dưới; OCR AI sẽ mở khi có khóa Gemini API.")
+    st.caption(f"Mô hình OCR: {model_name} · Gửi dữ liệu inline · store=false")
     consent = st.checkbox(
-        "Tôi đồng ý gửi nội dung các tệp được chọn tới OpenAI API để nhận diện chứng từ.",
+        "Tôi xác nhận được phép gửi nội dung các tệp được chọn tới Google Gemini API để nhận diện chứng từ.",
         value=False, key="ai_document_external_consent"
-    )
-    detail = st.radio(
-        "Mức đọc trang PDF", ["high", "low"], horizontal=True, index=0,
-        help="High phù hợp chứng từ scan/chữ nhỏ nhưng có thể tốn token hơn."
     )
     ai_files = st.file_uploader(
         "1. Tải nhiều chứng từ PDF/ảnh (hóa đơn, sao kê, UNC, ảnh chuyển tiền)",
@@ -647,7 +645,7 @@ with tabs[9]:
                 for uploaded in ai_files:
                     try:
                         extracted.append(extract_document(
-                            uploaded.name, uploaded.getvalue(), api_key, model_name, detail
+                            uploaded.name, uploaded.getvalue(), api_key, model_name
                         ))
                     except Exception as exc:
                         failures.append(f"{uploaded.name}: {exc}")
