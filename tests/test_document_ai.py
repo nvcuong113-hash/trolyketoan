@@ -99,3 +99,51 @@ def test_payment_mapping_does_not_allocate_unknown_direction():
     assert invoice_result.iloc[0]["Trạng thái"] == "Chưa tìm thấy thanh toán"
     assert mapping.empty
     assert tx_result.empty
+
+
+def test_register_reconciliation_does_not_double_repeated_invoice_total_per_tax_line():
+    bookkeeping = pd.DataFrame([
+        {"Số hóa đơn": "00123", "Ký hiệu hóa đơn": "C26TAA", "Mã số thuế người bán": "0101234567",
+         "Giá trị HHDV mua vào chưa có thuế": 100000, "Thuế GTGT": 8000, "Tổng thanh toán": 118000},
+        {"Số hóa đơn": "00123", "Ký hiệu hóa đơn": "C26TAA", "Mã số thuế người bán": "0101234567",
+         "Giá trị HHDV mua vào chưa có thuế": 50000, "Thuế GTGT": 5000, "Tổng thanh toán": 118000},
+    ])
+    tax_portal = pd.DataFrame([{
+        "Số hóa đơn": "123", "Ký hiệu hóa đơn": "C26TAA", "MST người bán/MST người xuất hàng": "0101234567",
+        "Tổng tiền chưa thuế": 150000, "Tổng tiền thuế": 13000, "Tổng tiền thanh toán": 118000
+    }])
+    result, _ = reconcile_invoice_registers(bookkeeping, tax_portal, epsilon=0)
+    assert len(result) == 1
+    assert result.iloc[0]["Trạng thái"] == "Khớp hoàn toàn"
+    assert result.iloc[0]["Tổng thanh toán bảng kê"] == 118000
+
+
+def test_register_reconciliation_flags_missing_tax_code_instead_of_dropping_invoice():
+    bookkeeping = pd.DataFrame([{
+        "Số hóa đơn": "9001", "Mã số thuế người bán": None,
+        "Giá trị HHDV mua vào chưa có thuế": 100000, "Thuế GTGT": 8000
+    }])
+    tax_portal = pd.DataFrame([{
+        "Số hóa đơn": "9001", "MST người bán/MST người xuất hàng": "0101234567",
+        "Tổng tiền chưa thuế": 100000, "Tổng tiền thuế": 8000, "Tổng tiền thanh toán": 108000
+    }])
+    result, counts = reconcile_invoice_registers(bookkeeping, tax_portal)
+    assert len(result) == 1
+    assert result.iloc[0]["Trạng thái"] == "Thiếu MST – cần xác minh"
+    assert counts["Thiếu MST – cần xác minh"] == 1
+
+
+def test_register_reconciliation_uses_invoice_symbol_to_resolve_duplicate_numbers():
+    bookkeeping = pd.DataFrame([{
+        "Số hóa đơn": "001", "Ký hiệu hóa đơn": "C26AAA", "Mã số thuế người bán": "0101234567",
+        "Giá trị HHDV mua vào chưa có thuế": 100000, "Thuế GTGT": 8000
+    }])
+    tax_portal = pd.DataFrame([
+        {"Số hóa đơn": "1", "Ký hiệu hóa đơn": "C26BBB", "MST người bán/MST người xuất hàng": "0101234567",
+         "Tổng tiền chưa thuế": 100000, "Tổng tiền thuế": 8000, "Tổng tiền thanh toán": 108000},
+        {"Số hóa đơn": "1", "Ký hiệu hóa đơn": "C26AAA", "MST người bán/MST người xuất hàng": "0101234567",
+         "Tổng tiền chưa thuế": 100000, "Tổng tiền thuế": 8000, "Tổng tiền thanh toán": 108000},
+    ])
+    result, _ = reconcile_invoice_registers(bookkeeping, tax_portal, epsilon=0)
+    assert result.iloc[0]["Ký hiệu danh sách"] == "C26AAA"
+    assert result.iloc[0]["Trạng thái"] == "Khớp hoàn toàn"
