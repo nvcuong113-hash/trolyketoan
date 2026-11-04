@@ -8,6 +8,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from gemini_client import create_interaction, interaction_text
+
 import pandas as pd
 
 
@@ -142,27 +144,6 @@ def _schema() -> dict[str, Any]:
     }
 
 
-def _response_text(response: dict[str, Any]) -> str:
-    direct = response.get("output_text")
-    if isinstance(direct, str) and direct.strip():
-        return direct
-    fragments = []
-    for step in response.get("steps") or []:
-        if step.get("type") != "model_output":
-            continue
-        for content in step.get("content") or []:
-            if content.get("type") == "text" and content.get("text"):
-                fragments.append(content["text"])
-    if not fragments:
-        # Compatibility fallback for an older Interactions API response shape.
-        for output in response.get("outputs") or []:
-            if output.get("type") == "text" and output.get("text"):
-                fragments.append(output["text"])
-    if not fragments:
-        raise ValueError("Gemini không trả về nội dung OCR có cấu trúc.")
-    return "\n".join(fragments)
-
-
 def extract_document(filename: str, content: bytes, api_key: str,
                      model: str = "gemini-3.5-flash-lite") -> dict[str, Any]:
     """Extract a PDF or image through Gemini Interactions API using transient inline bytes."""
@@ -203,48 +184,22 @@ def extract_document(filename: str, content: bytes, api_key: str,
         "Evidence ghi ngắn gọn vị trí/trích dẫn nhìn thấy (ví dụ trang 2, dòng giao dịch 5, vùng tổng thanh toán). "
         "Confidence nằm trong khoảng 0 đến 1. Không đưa ra tư vấn thuế hay kết luận pháp lý."
     )
-    request_body = {
-        "model": model,
-        "store": False,
-        "input": [
-            media_part,
-            {"type": "text", "text": instructions}
-        ],
-        "response_format": {
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": _schema()
-        }
-    }
-
-    from urllib.error import HTTPError, URLError
-    from urllib.request import Request, urlopen
-
-    request = Request(
-        "https://generativelanguage.googleapis.com/v1beta/interactions",
-        data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key
-        },
-        method="POST"
-    )
     try:
-        with urlopen(request, timeout=120) as response:
-            response_payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        try:
-            details = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            details = ""
-        raise RuntimeError(f"Gemini API trả lỗi HTTP {exc.code}: {details[:800]}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"Không kết nối được Gemini API: {exc.reason}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError("Gemini API trả về phản hồi không phải JSON hợp lệ.") from exc
-
-    try:
-        result = json.loads(_response_text(response_payload))
+        response = create_interaction(
+            api_key=api_key,
+            model=model,
+            input_parts=[
+                media_part,
+                {"type": "text", "text": instructions}
+            ],
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": _schema()
+            },
+            timeout=120
+        )
+        result = json.loads(interaction_text(response))
     except json.JSONDecodeError as exc:
         raise ValueError("Gemini trả về nội dung không đúng JSON. Hãy thử lại hoặc kiểm tra file.") from exc
     result["source_file"] = Path(filename).name
