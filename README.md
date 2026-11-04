@@ -42,9 +42,17 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 - Điền số hiệu, ngày hiệu lực và URL nguồn; chỉ chọn "Còn hiệu lực" khi đã kiểm chứng.
 - Tài khoản quản trị được allowlist bằng LEGAL_ADMIN_USER_IDS có thể xuất bản văn bản vào private Supabase Storage; mọi phiên người dùng chỉ tải các văn bản còn hiệu lực để truy xuất. Cần SUPABASE_SECRET_KEY phía server.
 
+## AI OCR chứng từ & mapping (FR-09)
+- Cấu hình `OPENAI_API_KEY` và tùy chọn `OPENAI_MODEL` (mặc định `gpt-4o-mini`) trong Streamlit Secrets.
+- Hỗ trợ PDF, PNG, JPG/JPEG tối đa 25 MB/tệp; tối đa 15 tệp/lượt. PDF được gửi dưới dạng `input_file` để mô hình đọc text và ảnh trang; ảnh dùng `input_image`.
+- Nội dung được gửi trực tiếp trong request Responses API dưới dạng base64; ứng dụng không tạo bản ghi Files API, không ghi file lên ổ đĩa và không lưu dữ liệu kế toán vào Supabase. Người dùng phải chủ động tick xác nhận trước khi OCR.
+- Sau OCR, kiểm tra/sửa dữ liệu nhận diện trước khi mapping. Engine giữ nguyên hậu tố MST chi nhánh, chuẩn hóa số 0 đầu số hóa đơn, gộp dòng thuế suất và không tự ghép khi MST xung đột hoặc có nhiều ứng viên.
+- Mapping hóa đơn–sao kê/UNC chỉ là đề xuất trong phiên. Kế toán xác nhận thủ công; không tự hạch toán hoặc cập nhật sổ kế toán.
+- Chi phí API phụ thuộc số trang, độ chi tiết PDF và model. Dùng `low` để giảm token khi chứng từ rõ; dùng `high` cho scan/chữ nhỏ.
+
 ## Kiểm thử
 ```bash
-python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py legal_storage.py process_billing_queue.py sample_data.py
+python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py legal_storage.py process_billing_queue.py document_ai.py sample_data.py
 pytest -q
 ```
 
