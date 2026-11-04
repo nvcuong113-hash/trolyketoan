@@ -44,3 +44,40 @@ def test_legal_storage_rejects_invalid_effective_date_order():
         assert False
     except ValueError as exc:
         assert "không được trước" in str(exc)
+
+
+
+def test_legal_answer_uses_gemini_and_only_supplied_sources(monkeypatch):
+    import legal_rag
+
+    captured = {}
+
+    def fake_create_interaction(**kwargs):
+        captured.update(kwargs)
+        return {"output_text": "Kết luận có điều kiện [1]."}
+
+    monkeypatch.setattr(legal_rag, "create_interaction", fake_create_interaction)
+    sources = [{
+        "number": "TT-TEST", "title": "Văn bản kiểm thử", "article": "Điều 1",
+        "text": "Doanh nghiệp lưu chứng từ kế toán.", "source_url": "https://vanban.chinhphu.vn/test"
+    }]
+    answer = legal_rag.answer_with_gemini(
+        "Lưu chứng từ thế nào?", sources, "gemini-key", "gemini-3.5-flash-lite"
+    )
+    assert answer == "Kết luận có điều kiện [1]."
+    assert captured["model"] == "gemini-3.5-flash-lite"
+    prompt = captured["input_parts"][0]["text"]
+    assert "Chỉ được kết luận dựa trên các trích đoạn nguồn" in prompt
+    assert "TT-TEST" in prompt
+    assert "https://vanban.chinhphu.vn/test" in prompt
+
+
+def test_legal_answer_without_sources_does_not_call_gemini(monkeypatch):
+    import legal_rag
+
+    def fail_if_called(**kwargs):
+        raise AssertionError("Gemini must not be called without retrieved legal sources")
+
+    monkeypatch.setattr(legal_rag, "create_interaction", fail_if_called)
+    answer = legal_rag.answer_with_gemini("Question", [], "gemini-key")
+    assert "không đưa ra kết luận" in answer
