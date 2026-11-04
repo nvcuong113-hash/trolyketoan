@@ -14,7 +14,7 @@ load_dotenv()
 from core import aging_report, build_staging, cashflow_summary, excel_bytes, mask_sensitive, parse_invoice_upload, read_tabular_bytes, reconcile_bank
 from accounting_extensions import advanced_pre_audit, build_executive_pnl, build_sepay_qr_url, map_staging_to_template, reconcile_payables
 from auth_service import get_public_client, get_admin_client, restore_session, save_session, sign_in, current_subscription
-from legal_rag import build_legal_index, retrieve_legal_context, answer_with_openai, make_checklist_xlsx
+from legal_rag import build_legal_index, retrieve_legal_context, answer_with_gemini, make_checklist_xlsx
 from legal_storage import publish_legal_document, load_published_legal_documents
 from sample_data import sample_workbook, sample_xml_zip, sample_legal_questions
 from reports import management_report_pdf
@@ -443,7 +443,7 @@ with tabs[7]:
     st.subheader("Cố vấn nghiệp vụ & pháp lý thuế có kiểm chứng")
     download_sample_bytes("⬇ Tải câu hỏi mẫu", sample_legal_questions(), "Cau_hoi_mau_co_van_thue.txt", "text/plain; charset=utf-8", "sample_fr07_questions")
     st.warning("Chỉ tài liệu có metadata hiệu lực và được người quản trị xác nhận mới được tìm kiếm. Hệ thống không tự xác minh hiệu lực của file tải lên.")
-    st.caption("Câu hỏi gửi đến AI (nếu đã cấu hình) chỉ được che một số chuỗi định danh bằng quy tắc tự động. Hãy tự bỏ tên khách hàng, số hợp đồng, địa chỉ và dữ liệu mật trước khi tra cứu.")
+    st.caption("Câu hỏi được gửi tới Gemini API nếu đã cấu hình. Dù hệ thống tự che một số chuỗi định danh, hãy tự bỏ tên khách hàng, số hợp đồng, địa chỉ và dữ liệu mật. Free Tier có thể sử dụng nội dung gửi lên để cải thiện sản phẩm.")
     legal_admin_ids = {x.strip() for x in get_setting("LEGAL_ADMIN_USER_IDS","").split(",") if x.strip()}
     is_legal_admin = bool(current_user and current_user.id in legal_admin_ids)
     if is_legal_admin:
@@ -482,16 +482,18 @@ with tabs[7]:
         masked_question = mask_sensitive(question)
         matches = retrieve_legal_context(legal_index,masked_question,5)
         st.session_state["result_legal_matches"] = matches
-        api_key = get_setting("OPENAI_API_KEY","")
+        api_key = get_setting("GEMINI_API_KEY","")
         if matches and api_key:
             try:
-                st.session_state["result_legal_answer"] = answer_with_openai(masked_question,matches,api_key,get_setting("OPENAI_MODEL","gpt-4o-mini"))
+                st.session_state["result_legal_answer"] = answer_with_gemini(
+                    masked_question, matches, api_key, get_setting("GEMINI_MODEL","gemini-3.5-flash-lite")
+                )
             except Exception as exc:
-                st.session_state["result_legal_answer"] = f"Không gọi được mô hình AI: {exc}. Chỉ hiển thị trích đoạn nguồn."
+                st.session_state["result_legal_answer"] = f"Không gọi được Gemini: {exc}. Chỉ hiển thị trích đoạn nguồn."
         elif not matches:
             st.session_state["result_legal_answer"] = "Không tìm thấy căn cứ phù hợp trong kho tài liệu đã nạp. Chưa thể kết luận."
         else:
-            st.session_state["result_legal_answer"] = "Chưa cấu hình OPENAI_API_KEY. Chỉ hiển thị trích đoạn để người dùng tự đối chiếu, không tự tạo kết luận."
+            st.session_state["result_legal_answer"] = "Chưa cấu hình GEMINI_API_KEY. Chỉ hiển thị trích đoạn để người dùng tự đối chiếu, không tự tạo kết luận."
     answer = st.session_state.get("result_legal_answer")
     matches = st.session_state.get("result_legal_matches",[])
     if answer:
