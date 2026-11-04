@@ -83,3 +83,19 @@ def test_documents_to_dataframes_preserves_source_and_confidence():
     assert inv.iloc[0]["Độ tin cậy"] == 0.96
     assert tx.empty
     assert summary.iloc[0]["Tệp"] == "scan.pdf"
+
+
+def test_payment_mapping_does_not_allocate_unknown_direction():
+    invoices = pd.DataFrame([{
+        "Số hóa đơn": "HD001", "MST người bán": "0101234567", "Tên người bán": "Công ty A",
+        "Tổng thanh toán": 100000
+    }])
+    transactions = pd.DataFrame([{
+        "Chiều giao dịch": "unknown", "Số tiền": 100000,
+        "Tên đối tác": "Công ty A", "MST đối tác": "0101234567",
+        "Nội dung": "Thanh toan HD001"
+    }])
+    invoice_result, mapping, tx_result = map_invoice_payments(invoices, transactions, epsilon=0)
+    assert invoice_result.iloc[0]["Trạng thái"] == "Chưa tìm thấy thanh toán"
+    assert mapping.empty
+    assert tx_result.empty
