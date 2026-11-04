@@ -37,7 +37,7 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 - Dùng tính năng gửi thử webhook trước khi nhận tiền thật.
 
 ## Cấu hình AI RAG
-- Đặt OPENAI_API_KEY phía server Streamlit; OPENAI_MODEL mặc định gpt-4o-mini.
+- Đặt GEMINI_API_KEY và GEMINI_MODEL=gemini-3.5-flash-lite phía server Streamlit cho tư vấn RAG; chỉ trả lời theo trích đoạn pháp lý đã xác minh.
 - Nạp file PDF có text / DOCX / TXT / MD của văn bản pháp luật chính thức.
 - Điền số hiệu, ngày hiệu lực và URL nguồn; chỉ chọn "Còn hiệu lực" khi đã kiểm chứng.
 - Tài khoản quản trị được allowlist bằng LEGAL_ADMIN_USER_IDS có thể xuất bản văn bản vào private Supabase Storage; mọi phiên người dùng chỉ tải các văn bản còn hiệu lực để truy xuất. Cần SUPABASE_SECRET_KEY phía server.
@@ -50,11 +50,11 @@ uvicorn billing_api:app --host 0.0.0.0 --port 8000
 - Sau OCR, kiểm tra/sửa dữ liệu nhận diện trước khi mapping. Engine giữ nguyên hậu tố MST chi nhánh, chuẩn hóa số 0 đầu số hóa đơn, gộp dòng thuế suất và không tự ghép khi MST xung đột hoặc có nhiều ứng viên.
 - Mapping hóa đơn–sao kê/UNC chỉ là đề xuất trong phiên. Kế toán xác nhận thủ công; không tự hạch toán hoặc cập nhật sổ kế toán.
 - Đối chiếu bảng kê hỗ trợ biến thể header ngân hàng Việt Nam như `Phát sinh Nợ/Có`, `PS Nợ/Có`, `Ngày GD`, `Diễn giải`, `Mã GD`; dòng có cả Nợ và Có bị đưa về chiều `unknown` và không tự mapping.
-- `OPENAI_API_KEY` vẫn chỉ dùng cho Cố vấn pháp lý RAG hiện có (nếu bật); FR-09 OCR không gọi OpenAI.
+- Cùng một `GEMINI_API_KEY` được dùng cho OCR FR-09 và tư vấn pháp lý FR-07; ứng dụng không còn phụ thuộc OpenAI API.
 
 ## Kiểm thử
 ```bash
-python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py legal_storage.py process_billing_queue.py document_ai.py sample_data.py
+python -m compileall -q app.py core.py accounting_extensions.py auth_service.py billing_api.py legal_rag.py legal_storage.py process_billing_queue.py document_ai.py gemini_client.py sample_data.py
 pytest -q
 ```
 
