@@ -21,7 +21,7 @@ class FakeResponse:
 
 
 def test_create_interaction_uses_gemini_store_false_and_api_key_header(monkeypatch):
-    import urllib.request
+    import gemini_client
 
     captured = {}
 
@@ -30,7 +30,7 @@ def test_create_interaction_uses_gemini_store_false_and_api_key_header(monkeypat
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(gemini_client, "urlopen", fake_urlopen)
     response = create_interaction(
         "test-api-key", "gemini-3.5-flash-lite",
         [{"type": "text", "text": "test"}],
