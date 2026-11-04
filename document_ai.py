@@ -270,15 +270,27 @@ def documents_to_dataframes(extractions: list[dict[str, Any]]) -> tuple[pd.DataF
 
 
 def normalize_bank_statement(frame: pd.DataFrame) -> pd.DataFrame:
-    """Normalize bank XLSX/CSV data into the same transaction schema produced by OCR."""
-    date_col = _find_column(frame.columns, ["Ngày giao dịch", "Ngày hạch toán", "Ngày", "Transaction date", "Date"])
-    debit_col = _find_column(frame.columns, ["Số tiền ghi Nợ", "Ghi Nợ", "Tiền ra", "Debit", "Amount out"])
-    credit_col = _find_column(frame.columns, ["Số tiền ghi Có", "Ghi Có", "Tiền vào", "Credit", "Amount in"])
+    """Normalize common bank XLSX/CSV headers into the OCR transaction schema."""
+    date_col = _find_column(frame.columns, [
+        "Ngày giao dịch", "Ngày GD", "Ngày hạch toán", "Ngày hiệu lực", "Ngày", "Transaction date", "Date"
+    ])
+    debit_col = _find_column(frame.columns, [
+        "Số tiền ghi Nợ", "Phát sinh Nợ", "PS Nợ", "Ghi Nợ", "Tiền ra", "Debit amount", "Debit", "Amount out"
+    ])
+    credit_col = _find_column(frame.columns, [
+        "Số tiền ghi Có", "Phát sinh Có", "PS Có", "Ghi Có", "Tiền vào", "Credit amount", "Credit", "Amount in"
+    ])
     amount_col = _find_column(frame.columns, ["Số tiền", "Amount"])
-    desc_col = _find_column(frame.columns, ["Nội dung giao dịch", "Nội dung", "Diễn giải", "Description", "Transaction details"])
-    name_col = _find_column(frame.columns, ["Tên đối tác", "Tên nhà cung cấp", "Tên khách hàng", "Đối tác", "Counterparty"])
+    desc_col = _find_column(frame.columns, [
+        "Nội dung giao dịch", "Nội dung", "Diễn giải", "Mô tả", "Transaction details", "Description"
+    ])
+    name_col = _find_column(frame.columns, [
+        "Tên đối tác", "Tên nhà cung cấp", "Tên khách hàng", "Tên đơn vị", "Đối tác", "Counterparty"
+    ])
     tax_col = _find_column(frame.columns, ["MST đối tác", "MST nhà cung cấp", "Mã số thuế", "Tax code"])
-    reference_col = _find_column(frame.columns, ["Mã giao dịch", "Mã tham chiếu", "Reference", "Transaction ID"])
+    reference_col = _find_column(frame.columns, [
+        "Mã giao dịch", "Mã GD", "Số tham chiếu", "Mã tham chiếu", "Reference", "Transaction ID", "Ref no"
+    ])
     rows = []
     for _, row in frame.iterrows():
         debit = parse_amount(row.get(debit_col)) if debit_col else 0
@@ -286,6 +298,9 @@ def normalize_bank_statement(frame: pd.DataFrame) -> pd.DataFrame:
         if not debit and not credit and amount_col:
             amount = parse_amount(row.get(amount_col))
             direction = "unknown"
+        elif debit > 0 and credit > 0:
+            # Do not silently pick a side when a malformed row contains both values.
+            amount, direction = max(debit, credit), "unknown"
         elif debit > 0:
             amount, direction = debit, "debit"
         elif credit > 0:
@@ -294,14 +309,19 @@ def normalize_bank_statement(frame: pd.DataFrame) -> pd.DataFrame:
             continue
         if amount <= 0:
             continue
+
+        def clean_text(column):
+            value = row.get(column) if column else ""
+            return "" if value is None or pd.isna(value) else str(value).strip()
+
         rows.append({
             "Tệp nguồn": "Bảng kê ngân hàng", "Ngày giao dịch": _date_text(row.get(date_col)) if date_col else None,
             "Chiều giao dịch": direction, "Số tiền": amount,
-            "Tên đối tác": str(row.get(name_col, "") or "") if name_col else "",
+            "Tên đối tác": clean_text(name_col),
             "MST đối tác": normalize_tax_code(row.get(tax_col)) if tax_col else "",
             "Tài khoản đối tác": "", "Ngân hàng đối tác": "",
-            "Nội dung": str(row.get(desc_col, "") or "") if desc_col else "",
-            "Mã tham chiếu": str(row.get(reference_col, "") or "") if reference_col else "",
+            "Nội dung": clean_text(desc_col),
+            "Mã tham chiếu": clean_text(reference_col),
             "Độ tin cậy": 1.0, "Bằng chứng OCR": "Dữ liệu đọc trực tiếp từ bảng kê"
         })
     return pd.DataFrame(rows, columns=[
