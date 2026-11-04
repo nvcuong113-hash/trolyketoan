@@ -451,7 +451,7 @@ def map_invoice_payments(invoices: pd.DataFrame, transactions: pd.DataFrame,
     for tx_idx, tx in enumerate(tx_rows):
         direction = str(tx.get(tx_direction_col, "debit") if tx_direction_col else "debit").lower()
         amount = parse_amount(tx.get(tx_amount_col))
-        if amount <= 0 or direction not in {"debit", "chi", "ghi no", "out", "unknown"}:
+        if amount <= 0 or direction not in {"debit", "chi", "ghi no", "out"}:
             continue
         desc = str(tx.get(tx_desc_col, "") or "") if tx_desc_col else ""
         ref = str(tx.get(tx_ref_col, "") or "") if tx_ref_col else ""
