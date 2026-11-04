@@ -666,7 +666,8 @@ with tabs[9]:
             st.session_state["ai_invoice_records"] = inv_df
             st.session_state["ai_transaction_records"] = tx_df
             st.session_state["ai_document_failures"] = failures
-            st.session_state.pop("ai_document_mapping", None)
+            for stale_key in ("ai_document_mapping", "ai_invoice_payment_result", "ai_transaction_payment_result"):
+                st.session_state.pop(stale_key, None)
             st.success(f"Đã đọc thành công {len(extracted)}/{len(ai_files)} tệp.")
     failures = st.session_state.get("ai_document_failures", [])
     for failure in failures:
@@ -772,9 +773,13 @@ with tabs[9]:
     register_counts = st.session_state.get("ai_register_counts")
     if register_result is not None:
         st.markdown("**Tổng hợp kết quả đối chiếu**")
-        cols = st.columns(4)
-        for col, label in zip(cols, ["Khớp hoàn toàn", "Nghi vấn sai MST/chi nhánh", "Lệch giá trị", "Thiếu ở danh sách hóa đơn"]):
-            col.metric(label, int((register_result["Trạng thái"] == label).sum()))
+        metric_labels = [
+            "Khớp hoàn toàn", "Nghi vấn sai MST/chi nhánh", "Nghi vấn ký hiệu hóa đơn",
+            "Thiếu MST – cần xác minh", "Lệch giá trị", "Thiếu ở danh sách hóa đơn"
+        ]
+        cols = st.columns(3)
+        for idx, label in enumerate(metric_labels):
+            cols[idx % 3].metric(label, int((register_result["Trạng thái"] == label).sum()))
         st.dataframe(register_result, use_container_width=True, hide_index=True)
         if register_counts:
             st.caption("Số liệu tính trên hóa đơn đã gộp theo số hóa đơn + MST + ký hiệu; không tính từng dòng thuế suất là một hóa đơn.")
