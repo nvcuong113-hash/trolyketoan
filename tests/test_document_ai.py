@@ -104,18 +104,18 @@ def test_payment_mapping_does_not_allocate_unknown_direction():
 def test_register_reconciliation_does_not_double_repeated_invoice_total_per_tax_line():
     bookkeeping = pd.DataFrame([
         {"Số hóa đơn": "00123", "Ký hiệu hóa đơn": "C26TAA", "Mã số thuế người bán": "0101234567",
-         "Giá trị HHDV mua vào chưa có thuế": 100000, "Thuế GTGT": 8000, "Tổng thanh toán": 118000},
+         "Giá trị HHDV mua vào chưa có thuế": 100000, "Thuế GTGT": 8000, "Tổng thanh toán": 163000},
         {"Số hóa đơn": "00123", "Ký hiệu hóa đơn": "C26TAA", "Mã số thuế người bán": "0101234567",
-         "Giá trị HHDV mua vào chưa có thuế": 50000, "Thuế GTGT": 5000, "Tổng thanh toán": 118000},
+         "Giá trị HHDV mua vào chưa có thuế": 50000, "Thuế GTGT": 5000, "Tổng thanh toán": 163000},
     ])
     tax_portal = pd.DataFrame([{
         "Số hóa đơn": "123", "Ký hiệu hóa đơn": "C26TAA", "MST người bán/MST người xuất hàng": "0101234567",
-        "Tổng tiền chưa thuế": 150000, "Tổng tiền thuế": 13000, "Tổng tiền thanh toán": 118000
+        "Tổng tiền chưa thuế": 150000, "Tổng tiền thuế": 13000, "Tổng tiền thanh toán": 163000
     }])
     result, _ = reconcile_invoice_registers(bookkeeping, tax_portal, epsilon=0)
     assert len(result) == 1
     assert result.iloc[0]["Trạng thái"] == "Khớp hoàn toàn"
-    assert result.iloc[0]["Tổng thanh toán bảng kê"] == 118000
+    assert result.iloc[0]["Tổng thanh toán bảng kê"] == 163000
 
 
 def test_register_reconciliation_flags_missing_tax_code_instead_of_dropping_invoice():
@@ -147,3 +147,69 @@ def test_register_reconciliation_uses_invoice_symbol_to_resolve_duplicate_number
     result, _ = reconcile_invoice_registers(bookkeeping, tax_portal, epsilon=0)
     assert result.iloc[0]["Ký hiệu danh sách"] == "C26AAA"
     assert result.iloc[0]["Trạng thái"] == "Khớp hoàn toàn"
+
+
+def test_extract_document_sends_pdf_in_memory_and_disables_response_storage(monkeypatch):
+    import base64
+    import json
+    import sys
+    from types import SimpleNamespace
+    from document_ai import extract_document
+
+    captured = {}
+    payload = {
+        "document_type": "invoice", "document_confidence": 0.99,
+        "document_summary": "Hóa đơn đầu vào", "invoices": [],
+        "transactions": [], "warnings": []
+    }
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=json.dumps(payload))
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    raw = b"%PDF-1.4 test document"
+    result = extract_document("invoice.pdf", raw, "test-key", "gpt-4o-mini", "high")
+
+    assert result["document_type"] == "invoice"
+    assert captured["store"] is False
+    part = captured["input"][0]["content"][0]
+    assert part["type"] == "input_file"
+    assert part["detail"] == "high"
+    assert part["file_data"].endswith(base64.b64encode(raw).decode("ascii"))
+
+
+def test_extract_document_sends_image_as_input_image(monkeypatch):
+    import json
+    import sys
+    from types import SimpleNamespace
+    from document_ai import extract_document
+
+    captured = {}
+    payload = {
+        "document_type": "payment_proof", "document_confidence": 0.95,
+        "document_summary": "Ủy nhiệm chi", "invoices": [],
+        "transactions": [], "warnings": []
+    }
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=json.dumps(payload))
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    extract_document("transfer.png", b"png-bytes", "test-key")
+    part = captured["input"][0]["content"][0]
+    assert part["type"] == "input_image"
+    assert part["image_url"].startswith("data:image/png;base64,")
+    assert captured["store"] is False
