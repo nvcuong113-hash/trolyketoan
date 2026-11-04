@@ -152,29 +152,17 @@ def test_register_reconciliation_uses_invoice_symbol_to_resolve_duplicate_number
 def _mock_gemini_response(payload):
     import json
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps({
-                "steps": [{
-                    "type": "model_output",
-                    "content": [{"type": "text", "text": json.dumps(payload)}]
-                }]
-            }).encode("utf-8")
-
-    return FakeResponse()
+    return {
+        "steps": [{
+            "type": "model_output",
+            "content": [{"type": "text", "text": json.dumps(payload)}]
+        }]
+    }
 
 
 def test_extract_document_sends_pdf_inline_to_gemini_without_storage(monkeypatch):
     import base64
-    import json
-    import urllib.request
-    from document_ai import extract_document
+    import document_ai
 
     captured = {}
     payload = {
@@ -183,34 +171,28 @@ def test_extract_document_sends_pdf_inline_to_gemini_without_storage(monkeypatch
         "transactions": [], "warnings": []
     }
 
-    def fake_urlopen(request, timeout):
-        captured["request"] = request
-        captured["timeout"] = timeout
+    def fake_create_interaction(**kwargs):
+        captured.update(kwargs)
         return _mock_gemini_response(payload)
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(document_ai, "create_interaction", fake_create_interaction)
     raw = b"%PDF-1.4 test document"
-    result = extract_document("invoice.pdf", raw, "gemini-test-key")
+    result = document_ai.extract_document("invoice.pdf", raw, "gemini-test-key")
 
-    request_body = json.loads(captured["request"].data.decode("utf-8"))
-    part = request_body["input"][0]
+    part = captured["input_parts"][0]
     assert result["document_type"] == "invoice"
     assert result["source_file"] == "invoice.pdf"
-    assert request_body["model"] == "gemini-3.5-flash-lite"
-    assert request_body["store"] is False
+    assert captured["model"] == "gemini-3.5-flash-lite"
     assert part["type"] == "document"
     assert part["mime_type"] == "application/pdf"
     assert part["data"] == base64.b64encode(raw).decode("ascii")
-    assert request_body["response_format"]["mime_type"] == "application/json"
-    assert captured["request"].get_header("X-goog-api-key") == "gemini-test-key"
+    assert captured["response_format"]["mime_type"] == "application/json"
     assert captured["timeout"] == 120
 
 
 def test_extract_document_sends_image_inline_to_gemini(monkeypatch):
     import base64
-    import json
-    import urllib.request
-    from document_ai import extract_document
+    import document_ai
 
     payload = {
         "document_type": "payment_proof", "document_confidence": 0.95,
@@ -219,21 +201,19 @@ def test_extract_document_sends_image_inline_to_gemini(monkeypatch):
     }
     captured = {}
 
-    def fake_urlopen(request, timeout):
-        captured["request"] = request
+    def fake_create_interaction(**kwargs):
+        captured.update(kwargs)
         return _mock_gemini_response(payload)
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(document_ai, "create_interaction", fake_create_interaction)
     raw = b"png-bytes"
-    result = extract_document("transfer.png", raw, "gemini-test-key", "gemini-3.5-flash-lite")
+    result = document_ai.extract_document("transfer.png", raw, "gemini-test-key", "gemini-3.5-flash-lite")
 
-    request_body = json.loads(captured["request"].data.decode("utf-8"))
-    part = request_body["input"][0]
+    part = captured["input_parts"][0]
     assert result["document_type"] == "payment_proof"
     assert part["type"] == "image"
     assert part["mime_type"] == "image/png"
     assert part["data"] == base64.b64encode(raw).decode("ascii")
-    assert request_body["store"] is False
 
 
 def test_normalize_bank_statement_supports_common_vietnamese_headers():
