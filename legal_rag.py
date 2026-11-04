@@ -8,6 +8,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 import pandas as pd
+
+from gemini_client import create_interaction, interaction_text
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -108,24 +110,30 @@ def retrieve_legal_context(index: list[dict[str, Any]], question: str, top_k: in
     return [{**index[i], "score": float(scores[i])} for i in ranked if scores[i] > 0.015]
 
 
-def answer_with_openai(question: str, sources: list[dict[str, Any]], api_key: str,
-                       model: str = "gpt-4o-mini") -> str:
+def answer_with_gemini(question: str, sources: list[dict[str, Any]], api_key: str,
+                      model: str = "gemini-3.5-flash-lite") -> str:
+    """Answer only from retrieved official legal excerpts; no source means no conclusion."""
     if not sources:
         return "Không tìm thấy đoạn văn bản phù hợp trong kho tài liệu đã xác minh. Hệ thống không đưa ra kết luận."
-    from openai import OpenAI
     context = "\n\n".join(
         f"[{i+1}] {s['number']} – {s['title']} – {s.get('article','')}\n{s['text']}\nNguồn: {s['source_url']}"
-        for i,s in enumerate(sources)
+        for i, s in enumerate(sources)
     )
-    client = OpenAI(api_key=api_key)
-    response = client.responses.create(
+    prompt = (
+        "Bạn là trợ lý kế toán Việt Nam. Chỉ được kết luận dựa trên các trích đoạn nguồn được cung cấp. "
+        "Nếu nguồn thiếu, mâu thuẫn hoặc không đủ căn cứ, nói rõ chưa thể kết luận. "
+        "Không tự suy diễn hiệu lực văn bản. Trả lời gồm: kết luận có điều kiện; phân tích; "
+        "trích dẫn nguyên văn ngắn kèm số hiệu/điều/khoản; checklist chứng từ. "
+        "Gắn [1], [2] ngay sau từng nhận định. Không bịa số điều.\n\n"
+        f"Câu hỏi: {question}\n\nNguồn được truy xuất:\n{context}"
+    )
+    response = create_interaction(
+        api_key=api_key,
         model=model,
-        input=[
-            {"role":"system","content":"Bạn là trợ lý kế toán Việt Nam. Chỉ được kết luận dựa trên các trích đoạn nguồn được cung cấp. Nếu nguồn thiếu, mâu thuẫn hoặc không đủ căn cứ, nói rõ chưa thể kết luận. Không tự suy diễn hiệu lực văn bản. Trả lời gồm: kết luận có điều kiện; phân tích; trích dẫn nguyên văn ngắn kèm số hiệu/điều/khoản; checklist chứng từ. Gắn [1], [2] ngay sau từng nhận định. Không bịa số điều."},
-            {"role":"user","content":f"Câu hỏi: {question}\n\nNguồn được truy xuất:\n{context}"}
-        ],
+        input_parts=[{"type": "text", "text": prompt}],
+        timeout=120
     )
-    return response.output_text
+    return interaction_text(response)
 
 
 def make_checklist_xlsx(question: str, answer: str, sources: list[dict[str, Any]]) -> bytes:
