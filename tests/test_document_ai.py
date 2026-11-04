@@ -213,3 +213,30 @@ def test_extract_document_sends_image_as_input_image(monkeypatch):
     assert part["type"] == "input_image"
     assert part["image_url"].startswith("data:image/png;base64,")
     assert captured["store"] is False
+
+
+def test_normalize_bank_statement_supports_common_vietnamese_headers():
+    from document_ai import normalize_bank_statement
+
+    source = pd.DataFrame([{
+        "Ngày GD": "04/11/2026", "Phát sinh Nợ": "1.250.000",
+        "Phát sinh Có": 0, "Diễn giải": "Thanh toan HD001",
+        "Mã GD": "TX0001", "Tên đơn vị": "Công ty A"
+    }])
+    result = normalize_bank_statement(source)
+    assert len(result) == 1
+    assert result.iloc[0]["Chiều giao dịch"] == "debit"
+    assert result.iloc[0]["Số tiền"] == 1250000
+    assert result.iloc[0]["Mã tham chiếu"] == "TX0001"
+    assert result.iloc[0]["Nội dung"] == "Thanh toan HD001"
+
+
+def test_normalize_bank_statement_does_not_guess_when_both_debit_and_credit_present():
+    from document_ai import normalize_bank_statement
+
+    source = pd.DataFrame([{
+        "Ngày giao dịch": "04/11/2026", "Số tiền ghi Nợ": 1000,
+        "Số tiền ghi Có": 2000, "Nội dung giao dịch": "Dòng bất thường"
+    }])
+    result = normalize_bank_statement(source)
+    assert result.iloc[0]["Chiều giao dịch"] == "unknown"
