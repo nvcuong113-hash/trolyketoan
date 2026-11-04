@@ -655,7 +655,10 @@ with tabs[9]:
             if bank_file:
                 try:
                     bank_df = read_upload(bank_file, [
-                        "Ngày giao dịch", "Số tiền ghi Nợ", "Số tiền ghi Có", "Nội dung giao dịch"
+                        "Ngày giao dịch", "Ngày GD", "Ngày hạch toán", "Ngày hiệu lực",
+                        "Số tiền ghi Nợ", "Phát sinh Nợ", "PS Nợ", "Ghi Nợ",
+                        "Số tiền ghi Có", "Phát sinh Có", "PS Có", "Ghi Có",
+                        "Nội dung giao dịch", "Nội dung", "Diễn giải", "Mã GD", "Số tham chiếu"
                     ])
                     bank_tx = normalize_bank_statement(bank_df)
                     if not bank_tx.empty:
