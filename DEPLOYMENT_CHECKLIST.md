@@ -14,7 +14,7 @@
 - [ ] Cấu hình SUPABASE_SECRET_KEY ở server-side secrets để nạp kho pháp lý private.
 - [ ] Cấu hình LEGAL_ADMIN_USER_IDS bằng UUID tài khoản Auth được phép xuất bản văn bản.
 - [ ] Cấu hình GEMINI_API_KEY và GEMINI_MODEL=gemini-3.5-flash-lite cho FR-09; không ghi khóa vào repo.
-- [ ] OPENAI_API_KEY/OPENAI_MODEL chỉ còn phục vụ Cố vấn pháp lý RAG hiện có nếu muốn bật tính năng đó.
+- [ ] Dùng cùng GEMINI_API_KEY/GEMINI_MODEL cho OCR và Cố vấn pháp lý RAG; không cần OpenAI API key.
 - [ ] Kiểm thử OCR PDF có text, PDF scan, ảnh hóa đơn, sao kê, UNC và ảnh chụp chuyển tiền; kiểm tra cả trang nhiều dòng giao dịch.
 - [ ] Xác nhận cảnh báo đồng ý gửi dữ liệu cho Google Gemini API; kiểm tra ứng dụng gửi inline, không tạo Gemini Files API record, không ghi chứng từ xuống ổ đĩa.
 - [ ] Trước khi dùng Free Tier với chứng từ thật, pháp chế/đơn vị quản lý dữ liệu phải chấp thuận điều khoản dữ liệu của Google; Free Tier có thể dùng nội dung gửi lên để cải thiện sản phẩm.
@@ -62,4 +62,4 @@
 - [ ] Có kế toán và pháp chế xác nhận các quy tắc trước khi đưa vào vận hành.
 
 ## Cấu hình chưa thể điền thay chủ hệ thống
-Các giá trị cần cung cấp từ chủ tài khoản/tổ chức: Supabase project credentials, UUID quản trị, OpenAI API key (nếu dùng), tài khoản ngân hàng nhận tiền, SePay webhook secret, URL Streamlit và mẫu import MISA/VACOM thực tế. Không đưa các secret này vào GitHub.
+Các giá trị cần cung cấp từ chủ tài khoản/tổ chức: Supabase project credentials, UUID quản trị, tài khoản ngân hàng nhận tiền, SePay webhook secret, URL Streamlit và mẫu import MISA/VACOM thực tế. Không đưa các secret này vào GitHub.
