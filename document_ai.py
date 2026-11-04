@@ -142,24 +142,30 @@ def _schema() -> dict[str, Any]:
     }
 
 
-def _response_text(response: Any) -> str:
-    text = getattr(response, "output_text", None)
-    if text:
-        return text
+def _response_text(response: dict[str, Any]) -> str:
+    direct = response.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct
     fragments = []
-    for item in getattr(response, "output", []) or []:
-        for content in getattr(item, "content", []) or []:
-            value = getattr(content, "text", None)
-            if value:
-                fragments.append(value)
+    for step in response.get("steps") or []:
+        if step.get("type") != "model_output":
+            continue
+        for content in step.get("content") or []:
+            if content.get("type") == "text" and content.get("text"):
+                fragments.append(content["text"])
     if not fragments:
-        raise ValueError("Mô hình không trả về nội dung OCR có cấu trúc.")
+        # Compatibility fallback for an older Interactions API response shape.
+        for output in response.get("outputs") or []:
+            if output.get("type") == "text" and output.get("text"):
+                fragments.append(output["text"])
+    if not fragments:
+        raise ValueError("Gemini không trả về nội dung OCR có cấu trúc.")
     return "\n".join(fragments)
 
 
 def extract_document(filename: str, content: bytes, api_key: str,
-                     model: str = "gpt-4o-mini", pdf_detail: str = "high") -> dict[str, Any]:
-    """Extract fields from an in-memory PDF or image. No local file is written or uploaded to Files API."""
+                     model: str = "gemini-3.5-flash-lite") -> dict[str, Any]:
+    """Extract a PDF or image through Gemini Interactions API using transient inline bytes."""
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
         raise ValueError("Chỉ hỗ trợ PDF, PNG, JPG hoặc JPEG trong chức năng OCR.")
@@ -168,25 +174,21 @@ def extract_document(filename: str, content: bytes, api_key: str,
     if len(content) > MAX_DOCUMENT_BYTES:
         raise ValueError("Mỗi tệp OCR không được vượt quá 25 MB.")
     if not api_key:
-        raise ValueError("Chưa cấu hình OPENAI_API_KEY.")
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError("Thiếu thư viện OpenAI. Hãy cài requirements.txt mới nhất.") from exc
+        raise ValueError("Chưa cấu hình GEMINI_API_KEY.")
 
     encoded = base64.b64encode(content).decode("ascii")
     if suffix == ".pdf":
-        file_part = {
-            "type": "input_file", "filename": Path(filename).name,
-            "file_data": f"data:application/pdf;base64,{encoded}",
-            "detail": "low" if pdf_detail == "low" else "high"
+        media_part = {
+            "type": "document",
+            "mime_type": "application/pdf",
+            "data": encoded
         }
     else:
         mime = "image/png" if suffix == ".png" else "image/jpeg"
-        file_part = {
-            "type": "input_image",
-            "image_url": f"data:{mime};base64,{encoded}",
-            "detail": "high"
+        media_part = {
+            "type": "image",
+            "mime_type": mime,
+            "data": encoded
         }
 
     instructions = (
@@ -201,24 +203,50 @@ def extract_document(filename: str, content: bytes, api_key: str,
         "Evidence ghi ngắn gọn vị trí/trích dẫn nhìn thấy (ví dụ trang 2, dòng giao dịch 5, vùng tổng thanh toán). "
         "Confidence nằm trong khoảng 0 đến 1. Không đưa ra tư vấn thuế hay kết luận pháp lý."
     )
-    client = OpenAI(api_key=api_key)
-    response = client.responses.create(
-        model=model,
-        input=[{"role": "user", "content": [
-            file_part, {"type": "input_text", "text": instructions}
-        ]}],
-        store=False,
-        text={"format": {
-            "type": "json_schema",
-            "name": "accounting_document_extraction",
-            "strict": True,
+    request_body = {
+        "model": model,
+        "store": False,
+        "input": [
+            media_part,
+            {"type": "text", "text": instructions}
+        ],
+        "response_format": {
+            "type": "text",
+            "mime_type": "application/json",
             "schema": _schema()
-        }}
+        }
+    }
+
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    request = Request(
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key
+        },
+        method="POST"
     )
     try:
-        result = json.loads(_response_text(response))
+        with urlopen(request, timeout=120) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            details = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            details = ""
+        raise RuntimeError(f"Gemini API trả lỗi HTTP {exc.code}: {details[:800]}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Không kết nối được Gemini API: {exc.reason}") from exc
     except json.JSONDecodeError as exc:
-        raise ValueError("AI trả về dữ liệu không đúng cấu trúc JSON. Hãy thử lại hoặc kiểm tra file.") from exc
+        raise ValueError("Gemini API trả về phản hồi không phải JSON hợp lệ.") from exc
+
+    try:
+        result = json.loads(_response_text(response_payload))
+    except json.JSONDecodeError as exc:
+        raise ValueError("Gemini trả về nội dung không đúng JSON. Hãy thử lại hoặc kiểm tra file.") from exc
     result["source_file"] = Path(filename).name
     return result
 
